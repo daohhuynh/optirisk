@@ -19,7 +19,9 @@ from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-RESULTS = os.path.join(HERE, "results")
+# Defaults to bench/results; an explicit path lets the report be regenerated
+# from a downloaded CI artifact without copying files around.
+RESULTS = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "results")
 OUTFILE = os.path.join(REPO, "BENCHMARKS.md")
 
 
@@ -347,7 +349,79 @@ def main():
     else:
         A("_Not collected (numpy missing, or bench_bridge.py not run)._")
 
-    A("\n## 4. Full percentile output\n")
+    # ── Sections that must survive regeneration ────────────────────
+    # These were previously appended by hand after each run, which meant the
+    # next run silently deleted them. Generated from the run's own artifacts
+    # instead, so BENCHMARKS.md is reproducible in one command.
+
+    def embed(path, title, intro):
+        full = os.path.join(RESULTS, path)
+        if not os.path.exists(full):
+            return
+        A(f"\n## {title}\n")
+        if intro:
+            A(intro + "\n")
+        with open(full) as fh:
+            body = fh.read().strip()
+        body = "\n".join(ln for ln in body.split("\n")
+                          if not ln.startswith(("CSV,", "SCALAR,")))
+        A("```")
+        A(body)
+        A("```")
+
+    k = find_scalar(scalars, "blackscholes", "kernel_throughput_ops")
+    f32 = find_scalar(scalars, "blackscholes", "f32_scalar_throughput_ops")
+    sc = find_scalar(scalars, "blackscholes", "scalar_throughput_ops")
+    mx = find_scalar(scalars, "blackscholes", "speedup_math_only")
+    vx = find_scalar(scalars, "blackscholes", "speedup_vectorization_only")
+    if k and f32 and sc and mx and vx:
+        A("\n## 4.6 Where the option kernel speedup comes from\n")
+        A("The headline figure compares scalar f64 libm against AVX2 f32, which changes\n"
+          "two things at once. The middle rung is scalar f32 using the kernel's exact\n"
+          "approximations, so A to B isolates math and B to C isolates vectorization.\n"
+          "All three run back to back on one thread over the same batch.\n")
+        A("| Variant | M options/s |")
+        A("|---|---|")
+        A(f"| A. scalar f64, libm `std::erfc` | {float(sc['value'])/1e6:,.1f} |")
+        A(f"| B. scalar f32, same approximations | {float(f32['value'])/1e6:,.1f} |")
+        A(f"| C. AVX2 f32, 8 lanes (shipped) | {float(k['value'])/1e6:,.1f} |")
+        A("")
+        A(f"- Cheaper math (A to B): **{float(mx['value']):.2f}x**")
+        A(f"- Vectorization (B to C): **{float(vx['value']):.2f}x**")
+        A(f"- Total: **{float(k['value'])/float(sc['value']):.2f}x**")
+        agree = find_scalar(scalars, "blackscholes", "f32_scalar_vs_avx2_max_diff")
+        if agree:
+            A(f"\nB and C agree to {float(agree['value']):.3e} max absolute difference, so the\n"
+              "split compares two implementations of one function.\n")
+
+    bbo = find_stat(stats, "clob", "bbo_publish_latency")
+    snd = find_stat(stats, "clob", "bbo_multicast_sendmsg")
+    if bbo and snd:
+        A("\n## 4.7 BBO: in-process visibility is not the wire\n")
+        A("| Stage | p50 | p99 | Transport |")
+        A("|---|---|---|---|")
+        A(f"| Flip to in-process reader observes | {ns(bbo['p50_ns'])} ns | {ns(bbo['p99_ns'])} ns | "
+          "Two threads, one process, shared ping-pong buffer. No socket. |")
+        A(f"| `broadcast_bbo` sendmsg | {ns(snd['p50_ns'])} ns | {ns(snd['p99_ns'])} ns | "
+          "`sendmsg` to 239.255.0.1:9090, 2-entry iovec |")
+        A("\nFill-to-wire is the sum, and the syscall dominates it. UDP multicast appears\n"
+          "in exactly one place in the project: `UdpPublisher`\n"
+          "(`backend/src/network/udp_publisher.hpp`), constructed in `main.cpp` and called\n"
+          "from the broadcast thread. A browser cannot receive multicast, so the frontend\n"
+          "uses the WebSocket path and the UDP feed has no consumer in this repository.\n")
+
+    embed("bench_convergence.log", "4.5 Cascade termination",
+          "Stopping at the first round with no new default looks free. It is not; this\n"
+          "is why `CascadeTermination::RiskQuiescence` remains the default.")
+
+    embed("ablation_summary.log", "4.8 Contagion channel ablation",
+          "Two compile-time flags remove one propagation path each, with no logic change.\n"
+          "Four builds cover the 2x2. The both-off corner supplies the baseline: firms that\n"
+          "fail on the direct mark-to-market alone belong to neither channel, and without\n"
+          "that denominator any per-channel share would misattribute them. Round caps are\n"
+          "swept until the default count stops changing.")
+
+    A("\n## 4.9 Full percentile output\n")
     A("Complete per-metric percentiles, exactly as emitted:\n")
     if stats:
         A("| Bench | Metric | Build | n | mean | min | p50 | p90 | p99 | p99.9 | max | Conditions |")
