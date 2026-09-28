@@ -41,7 +41,22 @@ case "$ARCH" in
     x86_64)        ISA_FLAGS="-march=native -mavx2 -mfma" ;;
     *)             ISA_FLAGS="" ;;
 esac
-BASE_FLAGS="-std=c++23 -O3 $ISA_FLAGS -Wall -Wextra -Werror -DNDEBUG -I$SRC -I$HERE"
+# GCC 13+ raises -Winterference-size on disruptor.hpp's use of
+# std::hardware_destructive_interference_size, which -Werror turns into a hard
+# error. That is a real portability bug in backend/src (the project cannot be
+# built with GCC under its own mandated -Werror), but it is not this harness's
+# to fix, so suppress just that diagnostic when the compiler understands it.
+# Probed rather than assumed: clang errors on unknown -Wno- options under
+# -Werror, so a blind add would break the clang build instead.
+probe_flag() {
+    echo 'int main(){return 0;}' | $CXX -x c++ -std=c++23 -Werror "$1" - -o /dev/null 2>/dev/null
+}
+EXTRA_FLAGS=""
+if probe_flag "-Wno-interference-size"; then
+    EXTRA_FLAGS="-Wno-interference-size"
+fi
+
+BASE_FLAGS="-std=c++23 -O3 $ISA_FLAGS -Wall -Wextra -Werror $EXTRA_FLAGS -DNDEBUG -I$SRC -I$HERE"
 LDFLAGS="-lpthread"
 
 # ══════════════════════════════════════════════════════════════════════════
