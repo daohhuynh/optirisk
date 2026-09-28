@@ -15,6 +15,7 @@
 #include <cstdint>
 
 #include "memory/csr_graph.hpp"
+#include "memory/options_book.hpp"
 #include "market/order_book.hpp"
 #include "compute/simd_engine.hpp"
 #include "compute/cascade_engine.hpp"
@@ -72,13 +73,18 @@ static void test_cascade_loop() {
     CLOBEngine clob{};
     init_clob(clob);
 
+    // The cascade prices the options book every round (gamma-squeeze path),
+    // so it must be seeded even when this test only exercises linear exposure.
+    OptionsBook options{};
+    init_options_book(options);
+
     // Initial shock: -30% Crypto
     ShockPayload shock{};
     shock.target_node_id = 0;
     shock.crypto_delta = -0.30;
     shock.shock_type = 1; // Market
 
-    CascadeStats stats = run_cascade_tick(clob, graph, shock);
+    CascadeStats stats = run_cascade_tick(clob, graph, options, shock);
 
     // Node 0 started with $800 crypto. A 30% drop is -$240.
     // NAV was $100. NAV drops to -$140 -> defaults.
@@ -87,12 +93,15 @@ static void test_cascade_loop() {
     CHECK(stats.total_liquidations == stats.total_defaults, "All defaulted nodes liquidated");
     CHECK(stats.total_slippage > 0.0, "Liquidations caused CLOB slippage");
 
-    std::printf("  Rounds: %u | Defaults: %u | Liq: %u | Slip: %.4f | Cycles: %llu\n",
+    std::printf("  Rounds: %u | Defaults: %u | Liq: %u | Slip: %.4f | Compute: %lluns\n",
                 stats.rounds, stats.total_defaults, stats.total_liquidations,
-                stats.total_slippage, static_cast<unsigned long long>(stats.compute_cycles));
+                stats.total_slippage, static_cast<unsigned long long>(stats.compute_ns));
 }
 
 int main() {
+    // Resolve the timestamp counter rate before any compute_ns is recorded.
+    calibrate_timestamp_clock();
+
     std::printf("═══════════════════════════════════════════\n");
     std::printf("  OptiRisk — Cascade Engine Tests\n");
     std::printf("═══════════════════════════════════════════\n\n");

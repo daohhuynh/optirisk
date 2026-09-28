@@ -1,0 +1,5 @@
+# Build artifacts and measurement output — never committed.
+# Results without the environment.txt that produced them are worthless,
+# and a stale results/ directory is worse than an empty one.
+bin/
+results/

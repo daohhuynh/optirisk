@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cmath>
+#include <chrono>
 #include <algorithm>
 
 #include "memory/csr_graph.hpp"
@@ -44,6 +45,19 @@
     #define OPTIRISK_SCALAR 1
 #endif
 
+// ── Prefetch Toggle (benchmark ablation only) ─────────────────────
+//
+// Default builds expand to exactly the original __builtin_prefetch calls,
+// so the shipped binary is unchanged. Define OPTIRISK_NO_PREFETCH to
+// compile every explicit prefetch out; bench/ builds both variants to
+// measure what the prefetching is actually worth. Nothing else differs.
+//
+#ifdef OPTIRISK_NO_PREFETCH
+    #define OPTIRISK_PREFETCH(addr, rw, locality) ((void)0)
+#else
+    #define OPTIRISK_PREFETCH(addr, rw, locality) __builtin_prefetch((addr), (rw), (locality))
+#endif
+
 namespace optirisk::compute {
 
 // Using native memory and network models
@@ -58,37 +72,73 @@ inline constexpr float    STRESS_THRESH  = 0.40f;  // Above this, neighbors abso
 inline constexpr float    STRESS_FACTOR  = 0.15f;  // How much risk a stressed (non-defaulted) node leaks
 inline constexpr float    QUIESCENCE_EPS = 1e-5f;  // Risk movement below this counts as "no change"
 
-// ── Hardware Cycle Counter ───────────────────────────────────────
+// ── Hardware Timestamp Counter ───────────────────────────────────
 //
-// Reads the CPU's monotonic cycle counter with zero OS involvement.
-// This is the gold standard for sub-microsecond latency measurement:
-//   x86-64: RDTSC instruction (reads Time Stamp Counter, invariant on
-//           modern CPUs since Nehalem). Costs ~25 cycles.
-//   ARM64:  CNTVCT_EL0 register (virtual count register, reads the
-//           generic timer at CPU frequency). Costs ~2 cycles on M1+.
+// Reads a monotonic hardware counter with zero OS involvement — no
+// syscall, no vDSO, no jitter from clock_gettime(). This is the right
+// primitive for sub-microsecond latency measurement.
 //
-// The delta between two reads gives the exact number of CPU cycles
-// consumed by the code in between — no syscall, no vDSO, no overhead,
-// no jitter from clock_gettime().
+// IMPORTANT: on NEITHER platform does this counter tick at the core
+// clock, so a raw delta is a TICK count, not a CYCLE count:
+//   x86-64: RDTSC returns the invariant TSC, which ticks at a fixed
+//           reference frequency (typically the part's base clock) and
+//           deliberately does NOT track turbo or frequency scaling.
+//   ARM64:  CNTVCT_EL0 is a fixed-rate system counter. Its frequency is
+//           architecturally reported by CNTFRQ_EL0 — 1 GHz on Apple
+//           Silicon, 24 MHz on many other ARM parts. It is entirely
+//           unrelated to core frequency.
+//
+// Never divide a delta by "the CPU's GHz" to get a duration. Convert
+// with ticks_to_ns(), which resolves the real rate at startup.
 //
 __attribute__((always_inline))
-inline uint64_t read_cycles() noexcept {
+inline uint64_t read_timestamp() noexcept {
 #if defined(__x86_64__) || defined(_M_X64)
-    // RDTSC: Read Time-Stamp Counter
-    // Returns the 64-bit cycle count since last reset.
-    // On modern x86 (Nehalem+), TSC is invariant (constant rate
-    // regardless of frequency scaling/turbo boost).
     return __rdtsc();
 #elif defined(__aarch64__)
-    // CNTVCT_EL0: Counter Timer Virtual Count register
-    // Ticks at the CPU’s core frequency on Apple Silicon.
-    // __builtin_readcyclecounter() emits a single MRS instruction.
     uint64_t val;
     asm volatile("mrs %0, CNTVCT_EL0" : "=r"(val));
     return val;
 #else
-    return 0;  // No cycle counter available
+    return 0;  // No hardware counter available
 #endif
+}
+
+// ── Tick → Nanosecond Conversion ─────────────────────────────────
+//
+// Resolved exactly once at startup (cold path) by
+// calibrate_timestamp_clock(). On ARM64 the counter frequency is
+// architecturally enumerable via CNTFRQ_EL0, so the conversion is exact.
+// On x86-64 the invariant-TSC rate is not enumerable, so we calibrate
+// against steady_clock for a few milliseconds during boot.
+//
+inline double g_ns_per_tick = 1.0;
+
+inline void calibrate_timestamp_clock() noexcept {
+#if defined(__aarch64__)
+    uint64_t freq_hz;
+    asm volatile("mrs %0, CNTFRQ_EL0" : "=r"(freq_hz));
+    g_ns_per_tick = (freq_hz > 0) ? (1e9 / static_cast<double>(freq_hz)) : 1.0;
+#elif defined(__x86_64__) || defined(_M_X64)
+    using clock = std::chrono::steady_clock;
+    const auto     wall_start = clock::now();
+    const uint64_t tick_start = read_timestamp();
+    while (clock::now() - wall_start < std::chrono::milliseconds(5)) { }
+    const uint64_t tick_end   = read_timestamp();
+    const auto     wall_end   = clock::now();
+
+    const double   elapsed_ns =
+        std::chrono::duration<double, std::nano>(wall_end - wall_start).count();
+    const uint64_t ticks = tick_end - tick_start;
+    g_ns_per_tick = (ticks > 0) ? (elapsed_ns / static_cast<double>(ticks)) : 1.0;
+#else
+    g_ns_per_tick = 1.0;  // No counter; ticks_to_ns() is a no-op on zeros
+#endif
+}
+
+__attribute__((always_inline))
+inline uint64_t ticks_to_ns(uint64_t ticks) noexcept {
+    return static_cast<uint64_t>(static_cast<double>(ticks) * g_ns_per_tick);
 }
 
 // ============================================================================
@@ -145,7 +195,7 @@ inline void apply_delta_to_array(double* __restrict__ arr,
         // Prefetch 4 cache lines ahead (256 bytes = 32 doubles ahead)
         // This hides the L1 miss latency by starting the memory fetch
         // before we need the data.
-        __builtin_prefetch(arr + i + 32, 1, 3);  // write intent, L1 temporal
+        OPTIRISK_PREFETCH(arr + i + 32, 1, 3);  // write intent, L1 temporal
 
         __m256d exposure = _mm256_loadu_pd(arr + i);
         __m256d result   = _mm256_fmadd_pd(exposure, vdelta, exposure);
@@ -165,7 +215,7 @@ inline void apply_delta_to_array(double* __restrict__ arr,
     const float64x2_t vdelta = vdupq_n_f64(delta);
 
     for (uint32_t i = 0; i < vec_end; i += SIMD_WIDTH) {
-        __builtin_prefetch(arr + i + 32, 1, 3);
+        OPTIRISK_PREFETCH(arr + i + 32, 1, 3);
 
         // Process 4 doubles as 2 × NEON 128-bit ops
         float64x2_t exp_lo = vld1q_f64(arr + i);
@@ -212,8 +262,8 @@ inline void recompute_nav_simd(optirisk::memory::NodeData& nodes, const uint32_t
 #if defined(OPTIRISK_AVX2)
     for (uint32_t i = 0; i < vec_end; i += SIMD_WIDTH) {
         // Prefetch next iteration's data into L1
-        __builtin_prefetch(&nodes.equities_exposure[i + 32],   0, 3);
-        __builtin_prefetch(&nodes.real_estate_exposure[i + 32], 0, 3);
+        OPTIRISK_PREFETCH(&nodes.equities_exposure[i + 32],   0, 3);
+        OPTIRISK_PREFETCH(&nodes.real_estate_exposure[i + 32], 0, 3);
 
         // Load all 5 exposure arrays for 4 nodes each
         __m256d eq = _mm256_loadu_pd(&nodes.equities_exposure[i]);
@@ -249,8 +299,8 @@ inline void recompute_nav_simd(optirisk::memory::NodeData& nodes, const uint32_t
 
 #elif defined(OPTIRISK_NEON)
     for (uint32_t i = 0; i < vec_end; i += SIMD_WIDTH) {
-        __builtin_prefetch(&nodes.equities_exposure[i + 32],   0, 3);
-        __builtin_prefetch(&nodes.real_estate_exposure[i + 32], 0, 3);
+        OPTIRISK_PREFETCH(&nodes.equities_exposure[i + 32],   0, 3);
+        OPTIRISK_PREFETCH(&nodes.real_estate_exposure[i + 32], 0, 3);
 
         // Process as 2 × float64x2_t per array (= 4 doubles)
         for (uint32_t lane = 0; lane < SIMD_WIDTH; lane += 2) {
@@ -365,8 +415,8 @@ inline CascadeResult run_cascade(optirisk::memory::CSRGraph& graph,
 
             const auto [begin, end] = graph.neighbors(nid);
             if (begin < end) {
-                __builtin_prefetch(&graph.edges.col_idx[begin], 0, 3);
-                __builtin_prefetch(&graph.edges.weight[begin],  0, 3);
+                OPTIRISK_PREFETCH(&graph.edges.col_idx[begin], 0, 3);
+                OPTIRISK_PREFETCH(&graph.edges.weight[begin],  0, 3);
             }
 
             for (uint32_t e = begin; e < end; ++e) {
@@ -432,15 +482,15 @@ inline CascadeResult run_cascade(optirisk::memory::CSRGraph& graph,
 struct TickResult {
     CascadeResult cascade;
     uint32_t      nodes_processed;
-    uint64_t      compute_cycles;  // CPU cycles for the entire SIMD tick
+    uint64_t      compute_ns;  // Wall-clock nanoseconds for the entire SIMD tick
 };
 
 inline TickResult apply_shock_simd(optirisk::memory::CSRGraph& graph,
                                    const optirisk::network::ShockPayload& shock) noexcept {
     const uint32_t N = graph.num_nodes;
 
-    // ── TELEMETRY: capture cycle counter BEFORE any work ───────────
-    const uint64_t t0 = read_cycles();
+    // ── TELEMETRY: capture hardware counter BEFORE any work ────────
+    const uint64_t t0 = read_timestamp();
 
     // ── Step 0: Snapshot old NAV for risk delta calculation ────────
     // We need the pre-shock NAV to compute how much each node's
@@ -493,10 +543,10 @@ inline TickResult apply_shock_simd(optirisk::memory::CSRGraph& graph,
     // ── Phase 3: Cascade Detection + BFS Propagation ──────────────
     CascadeResult cascade = run_cascade(graph, old_nav, N);
 
-    // ── TELEMETRY: capture cycle counter AFTER all work ─────────────
-    const uint64_t t1 = read_cycles();
+    // ── TELEMETRY: capture hardware counter AFTER all work ──────────
+    const uint64_t t1 = read_timestamp();
 
-    return TickResult{cascade, N, t1 - t0};
+    return TickResult{cascade, N, ticks_to_ns(t1 - t0)};
 }
 
 } // namespace optirisk::compute

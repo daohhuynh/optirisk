@@ -34,7 +34,7 @@ inline void compute_options_m2m(
     const __m256 v_two  = _mm256_set1_ps(2.0f);
     const __m256 v_inv_sq2 = _mm256_set1_ps(0.707106781f); // 1/sqrt(2)
 
-    // A&S erfc polynomial constants
+    // A&S 7.1.28 erfc polynomial constants
     const __m256 c1 = _mm256_set1_ps(0.0705230784f);
     const __m256 c2 = _mm256_set1_ps(0.0422820123f);
     const __m256 c3 = _mm256_set1_ps(0.0092705272f);
@@ -176,7 +176,9 @@ inline void compute_options_m2m(
         
         float d1 = (ln_S_K + (r + 0.5f*iv*iv)*T) / (iv * std::sqrt(T));
 
-        // A&S 7.1.27 Math
+        // A&S 7.1.28: erfc(x) = (1 + a1x + ... + a6x^6)^-16
+        // Published |eps| <= 3e-7 holds in f64 (measured 2.6e-7 over x in [0,6]).
+        // Evaluated in f32 here, where realized error is ~3.4e-6.
         float y = std::abs(d1) * 0.707106781f;
         float p = 1.0f + y*(0.0705230784f + y*(0.0422820123f + y*(0.0092705272f + y*(0.0001520143f + y*(0.0002765672f + y*0.0000430638f)))));
         p = p*p; p = p*p; p = p*p; p = p*p;
