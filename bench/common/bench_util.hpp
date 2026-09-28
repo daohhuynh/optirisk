@@ -107,6 +107,38 @@ inline int bench_core(int which) noexcept {
     return 0;
 }
 
+// ── Thread count ───────────────────────────────────────────────────
+//
+// "Single-threaded" is a claim about the process, so read it from the OS
+// rather than asserting it. Returns 0 where it cannot be determined.
+//
+inline int running_thread_count() noexcept {
+#if defined(__linux__)
+    FILE* f = std::fopen("/proc/self/status", "r");
+    if (!f) return 0;
+    char line[256];
+    int n = 0;
+    while (std::fgets(line, sizeof line, f)) {
+        if (std::sscanf(line, "Threads: %d", &n) == 1) break;
+    }
+    std::fclose(f);
+    return n;
+#else
+    return 0;
+#endif
+}
+
+inline void report_thread_count(const char* what) {
+    const int n = running_thread_count();
+    if (n > 0) {
+        std::printf("  process threads during %s: %d%s\n", what, n,
+                    (n == 1) ? "  (single-threaded, confirmed via /proc/self/status)"
+                             : "  *** NOT single-threaded ***");
+    } else {
+        std::printf("  process threads during %s: could not determine on this OS\n", what);
+    }
+}
+
 // ── Percentile summary ─────────────────────────────────────────────
 struct Stats {
     std::size_t count = 0;

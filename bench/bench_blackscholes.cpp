@@ -66,6 +66,63 @@ void scalar_delta_batch(const float* K, const float* T, const float* sigma,
     }
 }
 
+// ── Scalar f32, same algorithm as the AVX2 kernel, one lane ────────
+//
+// This exists to split the measured speedup into its two causes. The f64
+// std::erfc baseline differs from the shipped kernel in TWO ways at once:
+// cheaper math (f32 polynomial approximations instead of libm) and eight
+// lanes instead of one. Comparing only those two conflates them.
+//
+// Every operation below mirrors compute_options_m2m exactly: the same fast-log
+// series, the same Horner order on the A&S coefficients, the same saturation
+// of y at Y_SATURATE, and the same 14-bit reciprocal plus one Newton-Raphson
+// step rather than a true division. The only difference is lane count, so
+// (this vs AVX2) isolates vectorization and (f64 libm vs this) isolates math.
+void scalar_f32_approx_batch(const float* K, const float* T, const float* sigma,
+                             const float* r, const float* type, float S,
+                             float* out, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+        const float S_over_K = S / K[i];
+        const float z  = (S_over_K - 1.0f) / (S_over_K + 1.0f);
+        const float z2 = z * z;
+        float poly_L = std::fma(z2, 0.142857142f, 0.200000000f);
+        poly_L = std::fma(poly_L, z2, 0.333333333f);
+        poly_L = std::fma(poly_L, z2, 1.0f);
+        const float ln_S_K = 2.0f * z * poly_L;
+
+        const float sigma_sq = sigma[i] * sigma[i];
+        const float drift  = std::fma(0.5f, sigma_sq, r[i]);
+        const float d1_num = std::fma(drift, T[i], ln_S_K);
+        const float d1     = d1_num / (sigma[i] * std::sqrt(T[i]));
+
+        float y = std::fabs(d1) * 0.707106781f;
+        y = std::min(y, optirisk::compute::Y_SATURATE);
+
+        float pp = std::fma(0.0000430638f, y, 0.0002765672f);
+        pp = std::fma(pp, y, 0.0001520143f);
+        pp = std::fma(pp, y, 0.0092705272f);
+        pp = std::fma(pp, y, 0.0422820123f);
+        pp = std::fma(pp, y, 0.0705230784f);
+        pp = std::fma(pp, y, 1.0f);
+        pp = pp * pp; pp = pp * pp; pp = pp * pp; pp = pp * pp;  // ^16
+
+#if defined(HAS_AVX2)
+        // Scalar form of the kernel's reciprocal: 14-bit estimate, one NR step.
+        float inv = _mm_cvtss_f32(_mm_rcp_ss(_mm_set_ss(pp)));
+        inv = inv * (2.0f - pp * inv);
+#else
+        const float inv = 1.0f / pp;   // no rcp instruction here; noted in output
+#endif
+        const float erfc_v = inv;
+
+        const float half_erfc = 0.5f * erfc_v;
+        const float phi = (d1 < 0.0f) ? half_erfc : (1.0f - half_erfc);
+        float nd = phi + ((type[i] < 0.0f) ? -1.0f : 0.0f);
+        if (type[i] == 0.0f) nd = 0.0f;
+        out[i] = nd;
+    }
+}
+
 // The kernel's fast log, extracted verbatim for isolated error measurement.
 double fast_log_series(double x) {
     const double z = (x - 1.0) / (x + 1.0);
@@ -332,6 +389,9 @@ int main(int argc, char** argv) {
     std::printf("\n  1. THROUGHPUT (single core)\n");
     const bool pinned = pin_to_core(bench_core(0));
     std::printf("     thread pinning: %s\n", pinned ? "ACTIVE" : "UNAVAILABLE ON THIS OS");
+    report_thread_count("the throughput measurement");
+    std::printf("     no threads are spawned by this binary; all three variants run\n"
+                "     back to back on the calling thread over the same 496-option batch\n");
 
     // Fill a full BATCH of realistic positions.
     for (uint32_t i = 0; i < BATCH; ++i) {
@@ -389,17 +449,67 @@ int main(int argc, char** argv) {
     uint64_t scalar_ns = ticks_to_ns(read_timestamp() - t0);
     keep(sc_out[0]);
 
+    // Middle rung: scalar, f32, identical approximations, one lane.
+    std::vector<float> f32_out(BATCH);
+    for (uint64_t it = 0; it < WARMUP_ITERS; ++it) {
+        scalar_f32_approx_batch(sK.data(), sT.data(), sSig.data(), sR.data(), sTy.data(),
+                                500.0f, f32_out.data(), BATCH);
+    }
+    keep(f32_out[0]);
+
+    t0 = read_timestamp();
+    for (uint64_t it = 0; it < TIMED_ITERS; ++it) {
+        scalar_f32_approx_batch(sK.data(), sT.data(), sSig.data(), sR.data(), sTy.data(),
+                                500.0f + static_cast<float>(it % 7), f32_out.data(), BATCH);
+    }
+    const uint64_t f32_ns = ticks_to_ns(read_timestamp() - t0);
+    keep(f32_out[0]);
+
     const double kernel_ops = static_cast<double>(TIMED_ITERS * BATCH) / (static_cast<double>(kernel_ns) / 1e9);
     const double scalar_ops = static_cast<double>(SCALAR_ITERS * BATCH) / (static_cast<double>(scalar_ns) / 1e9);
+    const double f32_ops    = static_cast<double>(TIMED_ITERS * BATCH) / (static_cast<double>(f32_ns) / 1e9);
 
-    std::printf("     shipped kernel [%s]\n", bs_kernel_variant());
-    std::printf("     shipped kernel        : %.3f M options/s  (%.2f ns/option)\n",
-                kernel_ops / 1e6,
-                static_cast<double>(kernel_ns) / static_cast<double>(TIMED_ITERS * BATCH));
-    std::printf("     scalar std::erfc (f64): %.3f M options/s  (%.2f ns/option)\n",
+    std::printf("     %-34s %14s %14s\n", "variant", "M options/s", "ns/option");
+    std::printf("     %-34s %14.3f %14.2f\n", "A. scalar f64, libm std::erfc",
                 scalar_ops / 1e6,
                 static_cast<double>(scalar_ns) / static_cast<double>(SCALAR_ITERS * BATCH));
-    std::printf("     speedup               : %.2fx\n", kernel_ops / scalar_ops);
+    std::printf("     %-34s %14.3f %14.2f\n", "B. scalar f32, same approximations",
+                f32_ops / 1e6,
+                static_cast<double>(f32_ns) / static_cast<double>(TIMED_ITERS * BATCH));
+    std::printf("     %-34s %14.3f %14.2f\n", "C. AVX2 f32, 8 lanes (shipped)",
+                kernel_ops / 1e6,
+                static_cast<double>(kernel_ns) / static_cast<double>(TIMED_ITERS * BATCH));
+
+    // The decomposition only means anything if B and C compute the same thing.
+    {
+        book.last_delta.fill(0.0f);
+        optirisk::compute::compute_options_m2m(&book, 500.0f, BATCH, hedge.data());
+        std::vector<float> ref32(BATCH);
+        scalar_f32_approx_batch(sK.data(), sT.data(), sSig.data(), sR.data(), sTy.data(),
+                                500.0f, ref32.data(), BATCH);
+        double worst = 0.0;
+        for (uint32_t i = 0; i < BATCH; ++i) {
+            worst = std::max(worst, std::fabs(static_cast<double>(book.last_delta[i]) -
+                                              static_cast<double>(ref32[i])));
+        }
+        std::printf("\n     B vs C agreement: max |delta difference| = %.3e\n", worst);
+        std::printf("     (B and C must compute the same function or the split is meaningless)\n");
+        emit_csv_scalar("blackscholes", "f32_scalar_vs_avx2_max_diff", worst, "abs",
+                        "scalar f32 approx vs AVX2 kernel, same inputs");
+    }
+
+    const double math_x = f32_ops / scalar_ops;
+    const double vec_x  = kernel_ops / f32_ops;
+    std::printf("\n     DECOMPOSITION of the %.2fx total\n", kernel_ops / scalar_ops);
+    std::printf("       cheaper math  (A -> B): %.2fx   f64 libm to f32 polynomial approximations\n", math_x);
+    std::printf("       vectorization (B -> C): %.2fx   1 lane to 8 lanes (ceiling 8.00x)\n", vec_x);
+    std::printf("       product                %.2fx   (check: total is %.2fx)\n",
+                math_x * vec_x, kernel_ops / scalar_ops);
+
+    emit_csv_scalar("blackscholes", "f32_scalar_throughput_ops", f32_ops, "options/s",
+                    "scalar f32, same approximations as the AVX2 kernel, single lane");
+    emit_csv_scalar("blackscholes", "speedup_math_only", math_x, "x", "f64 libm -> f32 approx, both scalar");
+    emit_csv_scalar("blackscholes", "speedup_vectorization_only", vec_x, "x", "f32 approx scalar -> AVX2 8-lane");
 
     {
         char bscond[256];
