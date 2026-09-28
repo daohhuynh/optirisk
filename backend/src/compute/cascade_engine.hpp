@@ -88,7 +88,10 @@ inline CascadeStats run_cascade_tick(
     optirisk::market::CLOBEngine& clob,
     optirisk::memory::CSRGraph& graph,
     optirisk::memory::OptionsBook& options,
-    const optirisk::network::ShockPayload& shock
+    const optirisk::network::ShockPayload& shock,
+    // Safety cap, exposed so an experiment can check whether the default is
+    // truncating results. Defaulted, so every existing call site is unchanged.
+    const uint32_t max_rounds = MAX_CASCADE_ROUNDS
 ) noexcept {
     const uint64_t start_ticks = read_timestamp();
 
@@ -121,7 +124,7 @@ inline CascadeStats run_cascade_tick(
     clob.get_write_buffer(&bbo_buf, &bbo_count);
 
     // 2. Cascade Loop
-    while (keep_iterating && current_round < MAX_CASCADE_ROUNDS) {
+    while (keep_iterating && current_round < max_rounds) {
         keep_iterating = false;
 
         // Step A: Mark-to-Market (SIMD)
@@ -166,6 +169,13 @@ inline CascadeStats run_cascade_tick(
         compute_options_m2m(&options, current_equities_price, graph.num_nodes, hedge_volumes.data());
 
         // Dump resulting hedges immediately into Limit Order Book
+        //
+        // ABLATION FLAG, measurement only. OPTIRISK_NO_GAMMA_FEEDBACK removes
+        // the hedge orders, and with them the path by which option delta moves
+        // the equities price. Greeks are still computed above and last_delta is
+        // still updated, so only the PRICE FEEDBACK is removed, not the option
+        // book. Default builds are unchanged.
+#ifndef OPTIRISK_NO_GAMMA_FEEDBACK
         for (uint32_t i = 0; i < graph.num_nodes; ++i) {
             float hv = hedge_volumes[i];
             if (hv != 0.0f) {
@@ -178,6 +188,7 @@ inline CascadeStats run_cascade_tick(
                 }
             }
         }
+#endif
         
         // Re-read potentially shifted Equities price to feed the Linear M2M below
         if (current_round > 0) {
