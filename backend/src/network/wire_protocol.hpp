@@ -127,7 +127,7 @@ enum class ShockType : uint32_t {
 //   [42]     cascade_depth   uint8_t   (BFS depth if part of cascade, else 0)
 //   [43]     _pad            uint8_t   (alignment padding, zero)
 //   [44..47] tick_seq        uint32_t  (monotonic tick counter)
-//   [48..55] compute_cycles  uint64_t  (CPU cycles for SIMD compute kernel)
+//   [48..55] compute_ns      uint64_t  (nanoseconds in the compute kernel)
 //
 #pragma pack(push, 1)
 struct TickDelta {
@@ -142,7 +142,7 @@ struct TickDelta {
     uint8_t  cascade_depth;
     uint8_t  _pad = 0;
     uint32_t tick_seq;
-    uint64_t compute_cycles;   // CPU cycles spent in SIMD compute kernel (rdtsc/cntvct)
+    uint64_t compute_ns;       // Nanoseconds spent in the compute kernel (see ticks_to_ns)
 };
 
 // ── CreditRevoke (16 bytes) ───────────────────────────────────────

@@ -79,8 +79,21 @@ public:
     inline void broadcast_tick(const TickDelta& tick) noexcept {
         if (!valid_) [[unlikely]] return;
 
-        struct { MessageHeader hdr; TickDelta payload; } __attribute__((packed)) buf;
-        buf.hdr.msg_type = MsgType::TickDelta;
+        // No packed attribute: TickDelta is already #pragma pack(1) so its
+        // alignment is 1 and no padding can be inserted. GCC rejected the
+        // attribute anyway (MessageHeader has a default member initializer,
+        // so it is not trivial and the attribute was silently ignored). The
+        // static_assert is the guarantee that actually matters.
+        struct Frame { MessageHeader hdr; TickDelta payload; };
+        static_assert(sizeof(Frame) == sizeof(MessageHeader) + sizeof(TickDelta),
+                      "TickDelta UDP frame must have no padding between header and payload");
+        Frame buf;
+        buf.hdr.msg_type    = MsgType::TickDelta;
+        buf.hdr._reserved   = 0;
+        // payload_len was never assigned here, so every TickDelta multicast
+        // frame carried an indeterminate length field. A receiver using it to
+        // size the read would consume the wrong number of bytes.
+        buf.hdr.payload_len = static_cast<uint16_t>(sizeof(TickDelta));
         buf.payload = tick;
 
         sendto(sock_, &buf, sizeof(buf), 0, 
@@ -91,8 +104,13 @@ public:
     inline void broadcast_var(const VaRReport& report) noexcept {
         if (!valid_) [[unlikely]] return;
 
-        struct { MessageHeader hdr; VaRReport payload; } __attribute__((packed)) buf;
-        buf.hdr.msg_type = MsgType::VaRReport;
+        struct Frame { MessageHeader hdr; VaRReport payload; };
+        static_assert(sizeof(Frame) == sizeof(MessageHeader) + sizeof(VaRReport),
+                      "VaRReport UDP frame must have no padding between header and payload");
+        Frame buf;
+        buf.hdr.msg_type    = MsgType::VaRReport;
+        buf.hdr._reserved   = 0;
+        buf.hdr.payload_len = static_cast<uint16_t>(sizeof(VaRReport));
         buf.payload = report;
 
         sendto(sock_, &buf, sizeof(buf), 0, 

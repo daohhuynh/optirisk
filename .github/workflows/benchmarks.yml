@@ -1,0 +1,83 @@
+name: benchmarks
+
+# Runs the OptiRisk benchmark suite on a GitHub-hosted x86-64 runner, which
+# has the AVX2/FMA the project's kernels are written for. Apple Silicon
+# cannot run them: black_scholes_simd.hpp gates its 8-lane kernel on
+# __x86_64__ and has no NEON fallback, so on ARM it measures scalar code.
+#
+# Trigger manually from the Actions tab, or with:
+#   gh workflow run benchmarks.yml
+#
+# Results (raw per-sample CSVs, logs, environment.txt, disassembly, and the
+# generated BENCHMARKS.md) are uploaded as an artifact.
+
+on:
+  # Runs automatically when the harness lands on a bench/* branch, so the
+  # results are available without the workflow needing to sit on main first.
+  push:
+    branches:
+      - 'bench/**'
+  workflow_dispatch:
+    inputs:
+      quick:
+        description: "Quick mode (smaller iteration counts — smoke test only)"
+        type: boolean
+        default: false
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record the machine
+        run: |
+          echo "=== CPU ==="
+          lscpu || cat /proc/cpuinfo | head -30
+          echo
+          echo "=== AVX2 / FMA / AVX-512 ==="
+          for f in avx2 fma avx512f; do
+            if grep -qm1 " $f" /proc/cpuinfo; then echo "$f: yes"; else echo "$f: NO"; fi
+          done
+          echo
+          echo "=== Cores ==="
+          nproc
+          echo
+          echo "=== Toolchain ==="
+          g++ --version | head -1
+          cmake --version | head -1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ cmake python3-numpy binutils
+
+      - name: Run benchmarks
+        env:
+          # Runners are small; leave core 0 to the OS where possible.
+          # bench_core() falls back automatically if these don't exist.
+          OPTIRISK_BENCH_CORE_A: "0"
+          OPTIRISK_BENCH_CORE_B: "1"
+        run: |
+          if [ "${{ inputs.quick }}" = "true" ]; then
+            ./bench/run_all.sh --quick
+          else
+            ./bench/run_all.sh
+          fi
+
+      - name: Show the generated report
+        if: always()
+        run: cat BENCHMARKS.md || echo "BENCHMARKS.md not generated"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            bench/results/
+            BENCHMARKS.md
+          retention-days: 30
+          if-no-files-found: warn
