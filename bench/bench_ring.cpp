@@ -71,10 +71,12 @@ inline constexpr uint64_t THROUGHPUT_MS      = 3'000;
 inline constexpr uint64_t PIPELINE_EVENTS    = 400;
 inline constexpr uint64_t PIPELINE_WARMUP    = 100;
 #endif
-// Sized to the heaviest case, not the lightest. A capped cascade runs ~2.5 ms,
-// so a 300 us gap would let the ring queue and the measurement would report
-// queueing delay rather than pipeline latency.
-inline constexpr uint64_t PIPELINE_PACE_NS   = 6'000'000;
+// Sized above the heaviest case's p99, not its p50. The large-cascade case
+// measures ~4.5 ms p50 and ~10 ms p99, so anything under that lets the ring
+// queue and the result becomes queue depth rather than pipeline latency.
+// That failure is not subtle when it happens: it produced second-scale
+// "latencies" before the per-case ring reset was added.
+inline constexpr uint64_t PIPELINE_PACE_NS   = 20'000'000;
 }  // namespace cfg
 
 static std::atomic<bool> g_running{true};
@@ -363,9 +365,26 @@ void pipeline_latency(std::vector<uint64_t>& out, uint64_t n_events,
     out.clear();
     out.reserve(n_events);
 
+    // These are static only to keep 128 KB of ring off the stack. They MUST be
+    // reset per call: the write cursor persists across calls while the consumer
+    // restarts at read_seq 0, so without this the second case reads the first
+    // case's payloads out of stale slots and the consumer runs a full run
+    // behind the producer, turning the measurement into queue depth. That bug
+    // produced 2-round/0-default results and second-scale "latencies" before it
+    // was caught.
     static DisruptorHarness h;
     static RingBuffer<optirisk::network::TickDelta> tick_ring;
     static PaddedCursor tick_consumer;
+    h.~DisruptorHarness();
+    new (&h) DisruptorHarness();
+    tick_ring.~RingBuffer();
+    new (&tick_ring) RingBuffer<optirisk::network::TickDelta>();
+    tick_consumer.value.store(0, std::memory_order_relaxed);
+
+    // Guard: every consumed payload must be the shock this case asked for.
+    // A mismatch means the transport handed back something stale, which is
+    // exactly the failure above, and it should abort rather than be averaged.
+    std::atomic<uint64_t> wrong_payloads{0};
 
     std::vector<uint64_t> samples;
     samples.reserve(n_events + cfg::PIPELINE_WARMUP);
@@ -387,6 +406,9 @@ void pipeline_latency(std::vector<uint64_t>& out, uint64_t n_events,
                 continue;
             }
             const ShockPayload& shock = h.ring.get(read_seq);
+            if (shock.equities_delta != pc.eq || shock.crypto_delta != pc.cr) {
+                wrong_payloads.fetch_add(1, std::memory_order_relaxed);
+            }
             const uint64_t t0 = shock.timestamp_ns;
 
             const auto stats = optirisk::compute::run_cascade_tick(
@@ -443,6 +465,16 @@ void pipeline_latency(std::vector<uint64_t>& out, uint64_t n_events,
     }
 
     compute.join();
+
+    const uint64_t bad = wrong_payloads.load(std::memory_order_relaxed);
+    if (bad > 0) {
+        std::fprintf(stderr,
+                     "  FATAL: %llu of %llu events carried the wrong shock. The transport "
+                     "returned stale slots, so these timings are meaningless.\n",
+                     static_cast<unsigned long long>(bad),
+                     static_cast<unsigned long long>(n_events + cfg::PIPELINE_WARMUP));
+        std::abort();
+    }
 
     if (samples.size() > cfg::PIPELINE_WARMUP) {
         out.assign(samples.begin() + static_cast<long>(cfg::PIPELINE_WARMUP), samples.end());
