@@ -21,7 +21,7 @@ export function decodeTickDelta(buf: ArrayBuffer, offset = MSG_HEADER_SIZE): Tic
     hubId:         v.getUint8(41),
     cascadeDepth:  v.getUint8(42),
     tickSeq:       v.getUint32(44, true),
-    computeCycles: v.getBigUint64(48, true),
+    computeNs:     v.getBigUint64(48, true),
   };
 }
 

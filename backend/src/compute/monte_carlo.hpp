@@ -56,7 +56,7 @@ struct alignas(64) VaRResult {
     std::array<double, optirisk::memory::MAX_NODES> var_95;     // 95% worst-case drop
     std::array<double, optirisk::memory::MAX_NODES> expected;   // Mean drop
     uint32_t paths_run;
-    uint64_t compute_cycles;
+    uint64_t compute_ns;   // Wall-clock nanoseconds for the full MC burst
 };
 
 // ── Monte Carlo Tick ──────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ inline VaRResult run_monte_carlo_var(
     const optirisk::memory::CSRGraph& graph,
     const optirisk::network::ShockPayload& base_shock
 ) noexcept {
-    const uint64_t start_cycles = read_cycles();
+    const uint64_t start_ticks = read_timestamp();
 
     VaRResult result{};
     result.paths_run = MC_PATHS;
@@ -166,8 +166,8 @@ inline VaRResult run_monte_carlo_var(
         result.var_95[i] = mean[i] + (1.645 * std_dev);
     }
 
-    const uint64_t end_cycles = read_cycles();
-    result.compute_cycles = (end_cycles > start_cycles) ? (end_cycles - start_cycles) : 0;
+    const uint64_t end_ticks = read_timestamp();
+    result.compute_ns = (end_ticks > start_ticks) ? ticks_to_ns(end_ticks - start_ticks) : 0;
 
     return result;
 }

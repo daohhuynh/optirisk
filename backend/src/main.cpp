@@ -74,6 +74,7 @@ static void network_thread(optirisk::concurrency::DisruptorEngine& engine,
 //   compare pre/post snapshots and broadcast every node that moved.
 //
 static void compute_thread(optirisk::concurrency::DisruptorEngine& engine,
+                           optirisk::network::WsListener& listener,
                            optirisk::memory::CSRGraph& graph,
                            optirisk::memory::OptionsBook& options,
                            optirisk::market::CLOBEngine& clob,
@@ -151,7 +152,7 @@ static void compute_thread(optirisk::concurrency::DisruptorEngine& engine,
             tick.hub_id         = static_cast<uint8_t>(graph.nodes.hub_id[i]);
             tick.cascade_depth  = static_cast<uint8_t>(std::min(stats.rounds, 255u));
             tick.tick_seq       = this_tick_id;
-            tick.compute_cycles = stats.compute_cycles;
+            tick.compute_ns     = stats.compute_ns;
 
             engine.tick_ring.publish(seq);
             ++broadcast_count;
@@ -159,11 +160,11 @@ static void compute_thread(optirisk::concurrency::DisruptorEngine& engine,
 
         if (stats.total_defaults > 0 || broadcast_count > 0) {
             std::printf("[%s] tick=%u rounds=%u defaults=%u liquidations=%u "
-                        "slippage=%.4f bcast=%u cycles=%llu\n",
+                        "slippage=%.4f bcast=%u compute=%lluns\n",
                         origin, this_tick_id, stats.rounds, stats.total_defaults,
                         stats.total_liquidations, stats.total_slippage,
                         broadcast_count,
-                        static_cast<unsigned long long>(stats.compute_cycles));
+                        static_cast<unsigned long long>(stats.compute_ns));
             std::fflush(stdout);
         }
 
@@ -210,7 +211,7 @@ static void compute_thread(optirisk::concurrency::DisruptorEngine& engine,
                 tick.hub_id         = static_cast<uint8_t>(graph.nodes.hub_id[i]);
                 tick.cascade_depth  = 0;
                 tick.tick_seq       = this_tick;
-                tick.compute_cycles = 0;
+                tick.compute_ns     = 0;
 
                 engine.tick_ring.publish(tick_seq);
             }
@@ -221,33 +222,33 @@ static void compute_thread(optirisk::concurrency::DisruptorEngine& engine,
             continue;
         }
 
-        std::printf("[compute] tick=%u shock recv'd, starting MC\n", tick_counter);
-        std::fflush(stdout);
-
-        // 1. VaR Monte Carlo (for the Hero firm)
-        const auto var_result = optirisk::compute::run_monte_carlo_var(graph, shock);
-
-        std::printf("[compute] tick=%u MC done, expected=%.2f var_95=%.2f\n",
-                    tick_counter,
-                    var_result.expected[HERO_FIRM_ID],
-                    var_result.var_95[HERO_FIRM_ID]);
-        std::fflush(stdout);
-
-        if (tick_counter % 100 == 0) {
-            std::printf("[var] Node %u | Expected Loss: $%.2f | P95 VaR: $%.2f\n",
-                        HERO_FIRM_ID,
-                        var_result.expected[HERO_FIRM_ID],
-                        var_result.var_95[HERO_FIRM_ID]);
+        // ── VaR REQUEST PATH ─────────────────────────────────────────
+        if (shock.shock_type == 0xFE) {
+            std::printf("[compute] tick=%u VaR Request received for node %u\n", tick_counter, shock.target_node_id);
             std::fflush(stdout);
+
+            const auto var_result = optirisk::compute::run_monte_carlo_var(graph, shock);
 
             optirisk::network::VaRReport var_rep{};
-            var_rep.target_node = HERO_FIRM_ID;
+            var_rep.target_node = shock.target_node_id;
             var_rep.paths_run   = var_result.paths_run;
-            var_rep.var_95      = var_result.var_95[HERO_FIRM_ID];
+            var_rep.var_95      = var_result.var_95[shock.target_node_id];
+
+            listener.broadcast_var(var_rep);
             udp.broadcast_var(var_rep);
-            std::printf("[compute] tick=%u udp var sent\n", tick_counter);
+
+            std::printf("[compute] tick=%u VaR computed and broadcasted. paths=%u var_95=%.2f\n", 
+                        tick_counter, var_rep.paths_run, var_rep.var_95);
             std::fflush(stdout);
+
+            ++read_seq;
+            engine.compute_cursor.value.store(read_seq, std::memory_order_release);
+            ++engine.compute_count;
+            continue;
         }
+
+        std::printf("[compute] tick=%u shock recv'd, starting cascade\n", tick_counter);
+        std::fflush(stdout);
 
         // 2-4. Snapshot, cascade, and per-node TickDelta diff broadcast.
         const uint32_t this_tick = tick_counter++;
@@ -299,6 +300,12 @@ static void broadcast_thread(optirisk::concurrency::DisruptorEngine& engine,
     uint64_t last_report_seq = 0;
     auto last_report = std::chrono::steady_clock::now();
 
+    // The BBO batch in the inactive buffer belongs to ONE compute tick, but a
+    // tick fans out into many TickDeltas (one per node that moved). Track the
+    // tick we last flushed BBO for so a 40-node tick sends the batch once
+    // rather than 40 times.
+    uint32_t last_bbo_tick = UINT32_MAX;
+
     while (g_running.load(std::memory_order_relaxed)) [[likely]] {
         if (!engine.tick_ring.available(read_seq)) [[unlikely]] {
             #if defined(__x86_64__) || defined(_M_X64)
@@ -317,10 +324,13 @@ static void broadcast_thread(optirisk::concurrency::DisruptorEngine& engine,
         // UDP Multicast broadcast (UDP ITCH)
         udp.broadcast_tick(tick);
 
-        // Iterate BBO delta array and blast 10-byte limits via direct scatter-gather
-        auto bbo_deltas = clob.get_inactive_read_buffer();
-        if (!bbo_deltas.empty()) {
-            udp.broadcast_bbo(bbo_deltas);
+        // Blast the tick's BBO deltas via scatter-gather — once per tick.
+        if (tick.tick_seq != last_bbo_tick) {
+            last_bbo_tick = tick.tick_seq;
+            auto bbo_deltas = clob.get_inactive_read_buffer();
+            if (!bbo_deltas.empty()) {
+                udp.broadcast_bbo(bbo_deltas);
+            }
         }
 
         auto now = std::chrono::steady_clock::now();
@@ -332,14 +342,14 @@ static void broadcast_thread(optirisk::concurrency::DisruptorEngine& engine,
                 : 0.0;
 
             std::printf("[broadcast] tick=%u node=%u risk=%.3f nav=%.0f "
-                        "| %.0f msgs/sec | cycles=%llu "
+                        "| %.0f msgs/sec | compute=%lluns "
                         "| net=%llu comp=%llu bcast=%llu\n",
                         tick.tick_seq,
                         tick.node_id,
                         static_cast<double>(tick.risk_score),
                         tick.nav,
                         throughput,
-                        static_cast<unsigned long long>(tick.compute_cycles),
+                        static_cast<unsigned long long>(tick.compute_ns),
                         static_cast<unsigned long long>(engine.network_count),
                         static_cast<unsigned long long>(engine.compute_count),
                         static_cast<unsigned long long>(engine.broadcast_count));
@@ -358,12 +368,31 @@ static void broadcast_thread(optirisk::concurrency::DisruptorEngine& engine,
 static void load_market_binary(optirisk::memory::CSRGraph& graph) {
     graph.clear();
 
-    FILE* fp = std::fopen("../optirisk_memory.bin", "rb");
+    // Cold path — resolve the memory map relative to wherever the binary was
+    // launched from. The documented flow is `cd backend/build && ./optirisk`,
+    // which puts the repo root two levels up, but running from the repo root
+    // or from backend/ should work too.
+    static constexpr const char* CANDIDATE_PATHS[] = {
+        "../../optirisk_memory.bin",  // backend/build  (documented working dir)
+        "../optirisk_memory.bin",     // backend/
+        "optirisk_memory.bin",        // repo root
+    };
+
+    FILE* fp = nullptr;
+    for (const char* path : CANDIDATE_PATHS) {
+        fp = std::fopen(path, "rb");
+        if (fp) {
+            std::printf("[init] Loading market state from %s\n", path);
+            break;
+        }
+    }
     if (!fp) {
-        std::fprintf(stderr, "FATAL: Could not open ../optirisk_memory.bin. Run python scripts/infer_network.py first.\n");
+        std::fprintf(stderr,
+                     "FATAL: Could not locate optirisk_memory.bin (searched ../../, ../, ./).\n"
+                     "       Run `python scripts/infer_network.py` from the repo root first.\n");
         std::exit(1);
     }
-    
+
     // We expect exactly 500 nodes based on our data pipeline
     constexpr size_t N = optirisk::memory::MAX_NODES;
     constexpr size_t E = optirisk::memory::MAX_EDGES;
@@ -406,6 +435,12 @@ int main() {
 
     constexpr uint32_t NUM_NODES = 500;
 
+    // Resolve the hardware counter's tick rate ONCE, before any telemetry is
+    // recorded. The counter is not a core-frequency cycle counter on either
+    // platform (see read_timestamp()), so every duration we report is derived
+    // from this calibration rather than an assumed clock speed.
+    optirisk::compute::calibrate_timestamp_clock();
+
     std::printf("═══════════════════════════════════════════\n");
     std::printf("  OptiRisk — Counterparty Risk Simulator\n");
     std::printf("  Nodes: %u | Ring: %zu slots × %zu bytes\n",
@@ -413,6 +448,9 @@ int main() {
                 optirisk::concurrency::RING_SIZE,
                 sizeof(optirisk::concurrency::EventSlot<optirisk::network::ShockPayload>));
     std::printf("═══════════════════════════════════════════\n");
+    std::printf("[init] Timestamp counter: %.3f ns/tick (%.2f MHz)\n",
+                optirisk::compute::g_ns_per_tick,
+                1000.0 / optirisk::compute::g_ns_per_tick);
 
     // Build the counterparty graph (one-time heap-free init)
     static optirisk::memory::CSRGraph graph;  // static → .bss, zero-initialized
@@ -453,7 +491,7 @@ int main() {
 
     // Launch pipeline threads
     std::thread t1(network_thread,   std::ref(engine), std::ref(listener));
-    std::thread t2(compute_thread,   std::ref(engine), std::ref(graph), std::ref(options), std::ref(clob), std::ref(udp));
+    std::thread t2(compute_thread,   std::ref(engine), std::ref(listener), std::ref(graph), std::ref(options), std::ref(clob), std::ref(udp));
     std::thread t3(broadcast_thread, std::ref(engine), std::ref(listener), std::ref(clob), std::ref(udp));
 
     std::printf("[main] Pipeline running on WS port 8080. Press Ctrl+C to stop.\n\n");

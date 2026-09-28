@@ -35,7 +35,7 @@ export interface TickDeltaMsg {
   hubId: number;
   cascadeDepth: number;
   tickSeq: number;
-  computeCycles: bigint;
+  computeNs: bigint;
 }
 
 export interface VaRReportMsg {

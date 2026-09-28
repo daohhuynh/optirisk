@@ -1080,7 +1080,7 @@
         "Equities": 226032423.59,
         "Real_Estate": 76568055.78,
         "Crypto": 466208.81,
-        "Treasuries": 186670868.34,
+        "Treasuries": 186670868.35,
         "Corp_Bonds": 207189344.51
       },
       "total_assets": 696926901.03,
@@ -1398,10 +1398,10 @@
       },
       "portfolio": {
         "Equities": 1384827809.6,
-        "Real_Estate": 944031408.42,
+        "Real_Estate": 944031408.43,
         "Crypto": 289007503.59,
         "Treasuries": 594026754.97,
-        "Corp_Bonds": 982496692.17
+        "Corp_Bonds": 982496692.16
       },
       "total_assets": 4194390168.75,
       "liabilities": 338611689.54,
@@ -1800,7 +1800,7 @@
         "Equities": 44666637.05,
         "Real_Estate": 34741368.29,
         "Crypto": 16812367.25,
-        "Treasuries": 34868860.8,
+        "Treasuries": 34868860.79,
         "Corp_Bonds": 42395441.53
       },
       "total_assets": 173484674.92,
@@ -3257,7 +3257,7 @@
         "lon": 54.8367
       },
       "portfolio": {
-        "Equities": 79489452.02,
+        "Equities": 79489452.01,
         "Real_Estate": 31850953.84,
         "Crypto": 25809162.43,
         "Treasuries": 47394965.27,
@@ -4081,7 +4081,7 @@
         "Real_Estate": 76396280.78,
         "Crypto": 91035812.85,
         "Treasuries": 160180333.42,
-        "Corp_Bonds": 135537197.17
+        "Corp_Bonds": 135537197.16
       },
       "total_assets": 718943437.36,
       "liabilities": 161208885.74,
@@ -4838,7 +4838,7 @@
       },
       "portfolio": {
         "Equities": 263273860.15,
-        "Real_Estate": 241582248.49,
+        "Real_Estate": 241582248.48,
         "Crypto": 662763147.67,
         "Treasuries": 114073550.24,
         "Corp_Bonds": 138064509.07
@@ -4958,7 +4958,7 @@
       },
       "portfolio": {
         "Equities": 720938985.76,
-        "Real_Estate": 335362043.56,
+        "Real_Estate": 335362043.57,
         "Crypto": 211289049.17,
         "Treasuries": 204953972.75,
         "Corp_Bonds": 403518636.63
@@ -5198,7 +5198,7 @@
       },
       "portfolio": {
         "Equities": 23587325.94,
-        "Real_Estate": 18569004.86,
+        "Real_Estate": 18569004.85,
         "Crypto": 14329471.81,
         "Treasuries": 26875020.75,
         "Corp_Bonds": 25851940.58
@@ -5461,7 +5461,7 @@
         "Real_Estate": 66503993.17,
         "Crypto": 32639181.26,
         "Treasuries": 162008066.99,
-        "Corp_Bonds": 117149287.21
+        "Corp_Bonds": 117149287.22
       },
       "total_assets": 569513390.75,
       "liabilities": 41389784.53,
@@ -6117,7 +6117,7 @@
         "lon": -22.979
       },
       "portfolio": {
-        "Equities": 149168809.45,
+        "Equities": 149168809.46,
         "Real_Estate": 368163867.8,
         "Crypto": 268421750.47,
         "Treasuries": 1161776563.58,
@@ -7340,7 +7340,7 @@
         "Equities": 433439592.38,
         "Real_Estate": 181675638.0,
         "Crypto": 368553282.05,
-        "Treasuries": 357316884.15,
+        "Treasuries": 357316884.14,
         "Corp_Bonds": 305027877.93
       },
       "total_assets": 1646013274.5,
@@ -7938,7 +7938,7 @@
       },
       "portfolio": {
         "Equities": 142609123.83,
-        "Real_Estate": 94919209.9,
+        "Real_Estate": 94919209.91,
         "Crypto": 26641547.05,
         "Treasuries": 124072321.4,
         "Corp_Bonds": 151114078.65
@@ -8238,7 +8238,7 @@
       },
       "portfolio": {
         "Equities": 238825576.03,
-        "Real_Estate": 145085987.65,
+        "Real_Estate": 145085987.64,
         "Crypto": 114677950.63,
         "Treasuries": 467771674.85,
         "Corp_Bonds": 358108028.94
@@ -8257,7 +8257,7 @@
         "lon": -90.0174
       },
       "portfolio": {
-        "Equities": 339325515.55,
+        "Equities": 339325515.54,
         "Real_Estate": 270156444.94,
         "Crypto": 99617409.64,
         "Treasuries": 328279846.18,
@@ -8577,7 +8577,7 @@
         "lon": 68.7587
       },
       "portfolio": {
-        "Equities": 36558878.45,
+        "Equities": 36558878.46,
         "Real_Estate": 15358557.26,
         "Crypto": 33278157.83,
         "Treasuries": 35424977.06,
@@ -8781,7 +8781,7 @@
         "Real_Estate": 6786093.59,
         "Crypto": 9453812.85,
         "Treasuries": 85218311.04,
-        "Corp_Bonds": 73748198.88
+        "Corp_Bonds": 73748198.89
       },
       "total_assets": 287494708.81,
       "liabilities": 46438393.01,
@@ -8899,7 +8899,7 @@
       "portfolio": {
         "Equities": 105029400.46,
         "Real_Estate": 50003117.65,
-        "Crypto": 47516604.79,
+        "Crypto": 47516604.8,
         "Treasuries": 105417951.6,
         "Corp_Bonds": 115989800.66
       },
@@ -9397,7 +9397,7 @@
         "lon": -10.3494
       },
       "portfolio": {
-        "Equities": 601020220.03,
+        "Equities": 601020220.04,
         "Real_Estate": 149378063.67,
         "Crypto": 1412418.92,
         "Treasuries": 510822439.5,
