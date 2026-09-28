@@ -47,10 +47,12 @@ inline constexpr uint32_t MAX_CASCADE_ROUNDS = 1024;
 // under -50% across all classes. Stopping after K quiet rounds needs
 // K > 469 for this graph, which costs more than it saves.
 //
-// The 469-round gap is itself the finding worth chasing: it means those late
-// defaults come from the gamma-hedging loop grinding prices down round after
-// round, not from counterparty contagion. Fixing that is a change to the
-// model, not to this loop.
+// The long quiet gaps are the finding worth chasing. An earlier guess here
+// blamed the gamma-hedging loop; bench_ablation disproves it. Disabling the
+// hedge price feedback leaves the -80% equities result completely unchanged
+// (30 defaults, last at round 4143), while disabling counterparty contagion
+// removes all 30. The slow grind is stress contagion creeping along CSR edges,
+// not the option book. Fixing that is a change to the model, not to this loop.
 //
 // NoNewDefaults is kept only so bench_convergence.cpp can demonstrate the
 // divergence. Do not make it the default without changing the model first.
