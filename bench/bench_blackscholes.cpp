@@ -76,11 +76,24 @@ double fast_log_series(double x) {
 struct ErrStats {
     double max_abs = 0.0;
     double mean_abs = 0.0;
-    std::size_t n = 0;
+    std::size_t n = 0;              // finite comparisons only
+    std::size_t nan_kernel = 0;     // kernel returned a non-finite delta
+    std::size_t nan_ref = 0;        // reference returned a non-finite delta
     double worst_S = 0, worst_K = 0, worst_sig = 0, worst_T = 0;
+    double nan_S = 0, nan_K = 0, nan_sig = 0, nan_T = 0;
+    bool nan_seen = false;
 
-    void add(double err, double S, double K, double sig, double T) {
-        const double a = std::fabs(err);
+    // A non-finite result is a correctness failure, not a large error, and
+    // averaging it in would poison every other number. Count them separately
+    // and record the first input that produced one.
+    void add(double got, double want, double S, double K, double sig, double T) {
+        if (!std::isfinite(got)) {
+            ++nan_kernel;
+            if (!nan_seen) { nan_seen = true; nan_S = S; nan_K = K; nan_sig = sig; nan_T = T; }
+            return;
+        }
+        if (!std::isfinite(want)) { ++nan_ref; return; }
+        const double a = std::fabs(got - want);
         if (a > max_abs) { max_abs = a; worst_S = S; worst_K = K; worst_sig = sig; worst_T = T; }
         mean_abs += a;
         ++n;
@@ -146,12 +159,12 @@ int main(int argc, char** argv) {
             book.last_delta.fill(0.0f);
             optirisk::compute::compute_options_m2m(&book, static_cast<float>(S), count, hedge.data());
             for (uint32_t i = 0; i < filled; ++i) {
-                const double err = static_cast<double>(book.last_delta[i]) - want[i];
+                const double got = static_cast<double>(book.last_delta[i]);
                 const double m = std::fabs(std::log(gS[i] / gK[i]));
-                overall.add(err, gS[i], gK[i], gSig[i], gT[i]);
-                if (m <= 0.05)      atm.add(err, gS[i], gK[i], gSig[i], gT[i]);
-                else if (m <= 0.20) near_.add(err, gS[i], gK[i], gSig[i], gT[i]);
-                else                far.add(err, gS[i], gK[i], gSig[i], gT[i]);
+                overall.add(got, want[i], gS[i], gK[i], gSig[i], gT[i]);
+                if (m <= 0.05)      atm.add(got, want[i], gS[i], gK[i], gSig[i], gT[i]);
+                else if (m <= 0.20) near_.add(got, want[i], gS[i], gK[i], gSig[i], gT[i]);
+                else                far.add(got, want[i], gS[i], gK[i], gSig[i], gT[i]);
             }
             filled = 0;
         };
@@ -186,16 +199,49 @@ int main(int argc, char** argv) {
             std::printf("     %-28s worst at S=%.0f K=%.0f sigma=%.2f T=%.4f\n",
                         "", e.worst_S, e.worst_K, e.worst_sig, e.worst_T);
         }
+        if (e.nan_kernel > 0) {
+            std::printf("     %-28s *** KERNEL RETURNED NON-FINITE DELTA on %zu of %zu inputs ***\n",
+                        "", e.nan_kernel, e.nan_kernel + e.n);
+            std::printf("     %-28s     first at S=%.0f K=%.0f sigma=%.2f T=%.4f\n",
+                        "", e.nan_S, e.nan_K, e.nan_sig, e.nan_T);
+        }
+        if (e.nan_ref > 0) {
+            std::printf("     %-28s (reference non-finite on %zu inputs — excluded)\n", "", e.nan_ref);
+        }
     };
     report("ALL", overall);
     report("at-the-money |ln(S/K)|<=0.05", atm);
     report("near        <=0.20", near_);
     report("far          >0.20", far);
 
-    emit_csv_scalar("blackscholes", "delta_max_abs_err", overall.max_abs, "abs", "full grid");
+    emit_csv_scalar("blackscholes", "delta_nonfinite_count",
+                    static_cast<double>(overall.nan_kernel), "count",
+                    "inputs where the kernel returned NaN/Inf instead of a delta");
+    emit_csv_scalar("blackscholes", "delta_max_abs_err", overall.max_abs, "abs", "full grid, finite results only");
     emit_csv_scalar("blackscholes", "delta_mean_abs_err", overall.mean(), "abs", "full grid");
     emit_csv_scalar("blackscholes", "delta_max_abs_err_atm", atm.max_abs, "abs", "|ln(S/K)|<=0.05");
     emit_csv_scalar("blackscholes", "delta_max_abs_err_far", far.max_abs, "abs", "|ln(S/K)|>0.20");
+
+    // ── 2b. If the kernel produced non-finite output, locate the edge ──
+    if (overall.nan_kernel > 0) {
+        std::printf("\n  2b. NON-FINITE BOUNDARY — sweeping moneyness to find where it breaks\n");
+        std::printf("     (S fixed at 500, sigma 0.20, T 0.25, call)\n");
+        std::printf("     %-10s %-12s %-16s %-16s\n", "K", "ln(S/K)", "kernel delta", "reference");
+        for (double K : {500.0, 600.0, 700.0, 800.0, 900.0, 1000.0, 1200.0, 1500.0, 2000.0}) {
+            for (uint32_t i = 0; i < 8; ++i) {
+                book.strikes[i] = static_cast<float>(K);
+                book.expiries[i] = 0.25f; book.iv[i] = 0.20f; book.rates[i] = 0.02f;
+                book.types[i] = 1.0f;     book.positions[i] = 1.0f;
+            }
+            book.last_delta.fill(0.0f);
+            optirisk::compute::compute_options_m2m(&book, 500.0f, 8, hedge.data());
+            const double got = static_cast<double>(book.last_delta[0]);
+            const double wnt = ref_delta(500.0, K, 0.20, 0.02, 0.25, 1.0);
+            std::printf("     %-10.0f %-12.4f %-16.9g %-16.9g%s\n",
+                        K, std::log(500.0 / K), got, wnt,
+                        std::isfinite(got) ? "" : "   <-- NON-FINITE");
+        }
+    }
 
     // ── 3. Fast-log accuracy in isolation ──────────────────────────
     std::printf("\n  3. FAST-LOG SERIES vs std::log — error by S/K ratio\n");
