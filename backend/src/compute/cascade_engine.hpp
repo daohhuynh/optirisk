@@ -19,23 +19,70 @@
 
 namespace optirisk::compute {
 
-// Upper bound on cascade rounds before we declare equilibrium. Deliberately
-// generous: an 80% crypto crash with slippage feedback can run > 100 rounds
-// before quiescence. The loop also bails early as soon as a round produces
-// no new defaults, so this is just a safety cap, not the steady-state cost.
+// Safety cap only. With the default termination policy the loop exits as soon
+// as a round produces no new defaults, so this bound should never be reached;
+// it exists so a pathological shock cannot spin forever.
 inline constexpr uint32_t MAX_CASCADE_ROUNDS = 1024;
+
+// ── Termination policy ──────────────────────────────────────────────────
+//
+// RiskQuiescence (default): keep iterating while any node's risk score moved
+// by more than QUIESCENCE_EPS, or a default fired. This is the original and
+// currently the only correct policy.
+//
+// NoNewDefaults: stop as soon as a round produces no new default. This is
+// the obvious optimisation and it is WRONG for this model. Measured on the
+// real 500-node / 7500-edge graph:
+//
+//   shock           defaults   last default   longest quiet gap
+//   -80% equities         22      round 952            469 rounds
+//   -50% all classes     215      round  32             15 rounds
+//   -90% all classes     500      round   0              0 rounds
+//
+// Defaults do not arrive in a contiguous wave. Stress contagion nudges
+// neighbour risk upward a little each round, so a firm can cross
+// DEFAULT_THRESH hundreds of rounds after the previous one, with nothing
+// observable in between. Stopping at the first quiet round therefore drops
+// every one of the 22 defaults under a -80% equities shock, and 3 of 215
+// under -50% across all classes. Stopping after K quiet rounds needs
+// K > 469 for this graph, which costs more than it saves.
+//
+// The 469-round gap is itself the finding worth chasing: it means those late
+// defaults come from the gamma-hedging loop grinding prices down round after
+// round, not from counterparty contagion. Fixing that is a change to the
+// model, not to this loop.
+//
+// NoNewDefaults is kept only so bench_convergence.cpp can demonstrate the
+// divergence. Do not make it the default without changing the model first.
+//
+enum class CascadeTermination : uint8_t {
+    RiskQuiescence,   // correct; the shipped behaviour
+    NoNewDefaults,    // faster; loses defaults. See above.
+};
 
 struct CascadeStats {
     uint32_t rounds;
     uint32_t total_defaults;
     uint32_t total_liquidations;
     double   total_slippage;
-    uint64_t compute_ns;   // Wall-clock nanoseconds for the whole cascade
+    uint64_t compute_ns;        // Wall-clock nanoseconds for the whole cascade
+    uint32_t max_default_gap;    // Largest run of consecutive rounds that
+                                 // produced no default, yet was followed by
+                                 // one. Any "stop after K quiet rounds" rule
+                                 // must use K > this or it truncates the
+                                 // cascade.
+    uint32_t last_default_round; // Round index of the most recent default, or
+                                 // UINT32_MAX if none fired. This is what any
+                                 // termination rule has to respect: defaults in
+                                 // this model lag the shock, because stress
+                                 // contagion raises neighbour risk gradually
+                                 // until it crosses DEFAULT_THRESH.
 };
 
 // ── Fixed-Point Cascade Simulator ───────────────────────────────────────
 // Given an initial shock string from the LLM via WebSockets, this runs 
 // the cascade until equilibrium or MAX_ROUNDS is hit.
+template <CascadeTermination Policy = CascadeTermination::RiskQuiescence>
 __attribute__((always_inline))
 inline CascadeStats run_cascade_tick(
     optirisk::market::CLOBEngine& clob,
@@ -45,7 +92,7 @@ inline CascadeStats run_cascade_tick(
 ) noexcept {
     const uint64_t start_ticks = read_timestamp();
 
-    CascadeStats stats{0, 0, 0, 0.0, 0};
+    CascadeStats stats{0, 0, 0, 0.0, 0, 0, UINT32_MAX};
 
     // 1. Initial hit (Macro shock)
     // Update CLOB books based on the initial shock payload
@@ -143,9 +190,22 @@ inline CascadeStats run_cascade_tick(
 
         stats.total_defaults  += tick_result.cascade.defaults_triggered;
         total_risk_movements  += tick_result.cascade.risk_movements;
-        if (tick_result.cascade.risk_movements > 0 ||
-            tick_result.cascade.defaults_triggered > 0) {
+
+        // A round makes progress when it breaks someone new. Risk scores
+        // drifting without any default is not progress: it is the same
+        // equilibrium being re-measured against an unchanged baseline.
+        if (tick_result.cascade.defaults_triggered > 0) {
             keep_iterating = true;
+            const uint32_t gap = (stats.last_default_round == UINT32_MAX)
+                                     ? current_round
+                                     : (current_round - stats.last_default_round - 1);
+            if (gap > stats.max_default_gap) stats.max_default_gap = gap;
+            stats.last_default_round = current_round;
+        }
+        if constexpr (Policy == CascadeTermination::RiskQuiescence) {
+            if (tick_result.cascade.risk_movements > 0) {
+                keep_iterating = true;
+            }
         }
 
         // Collect newly defaulted nodes queue
@@ -158,6 +218,8 @@ inline CascadeStats run_cascade_tick(
         }
 
         if (liquidations_queued > 0) {
+            // Liquidations move CLOB prices, so the next round must mark to
+            // them even if this round's defaults were already counted above.
             keep_iterating = true;
 
             // Step B: Liquidate

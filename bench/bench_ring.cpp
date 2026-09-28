@@ -60,18 +60,21 @@ inline constexpr uint64_t LATENCY_EVENTS     = 50'000;
 inline constexpr int      REPEATS            = 2;
 inline constexpr uint64_t PACE_NS            = 2'000;
 inline constexpr uint64_t THROUGHPUT_MS      = 300;
-inline constexpr uint64_t PIPELINE_EVENTS    = 300;
-inline constexpr uint64_t PIPELINE_WARMUP    = 30;
+inline constexpr uint64_t PIPELINE_EVENTS    = 60;
+inline constexpr uint64_t PIPELINE_WARMUP    = 10;
 #else
 inline constexpr uint64_t WARMUP_EVENTS      = 200'000;
 inline constexpr uint64_t LATENCY_EVENTS     = 500'000;
 inline constexpr int      REPEATS            = 5;   // independent runs — p99 stability test
 inline constexpr uint64_t PACE_NS            = 2'000;       // 500k events/s arrival
 inline constexpr uint64_t THROUGHPUT_MS      = 3'000;
-inline constexpr uint64_t PIPELINE_EVENTS    = 20'000;
-inline constexpr uint64_t PIPELINE_WARMUP    = 500;
+inline constexpr uint64_t PIPELINE_EVENTS    = 2'000;
+inline constexpr uint64_t PIPELINE_WARMUP    = 100;
 #endif
-inline constexpr uint64_t PIPELINE_PACE_NS   = 300'000;
+// Sized to the heaviest case, not the lightest. A capped cascade runs ~2.5 ms,
+// so a 300 us gap would let the ring queue and the measurement would report
+// queueing delay rather than pipeline latency.
+inline constexpr uint64_t PIPELINE_PACE_NS   = 6'000'000;
 }  // namespace cfg
 
 static std::atomic<bool> g_running{true};
@@ -338,7 +341,25 @@ struct PipelineState {
 
 static PipelineState g_pipeline;
 
-void pipeline_latency(std::vector<uint64_t>& out, uint64_t n_events) {
+struct PipelineCase {
+    const char* name;
+    double eq, re, cr, tr, cb;
+};
+
+// Three regimes on the real graph, chosen by how much cascade they produce.
+// Rounds and default counts are reported alongside the latency, because the
+// cost of run_cascade_tick is a function of both.
+constexpr PipelineCase PIPELINE_CASES[] = {
+    {"no defaults",    -0.30,  0.00,  0.00,  0.00,  0.00},
+    {"small cascade",  -0.80,  0.00,  0.00,  0.00,  0.00},
+    {"large cascade",  -0.50, -0.50, -0.50, -0.50, -0.50},
+};
+
+static uint32_t g_last_rounds = 0;
+static uint32_t g_last_defaults = 0;
+
+void pipeline_latency(std::vector<uint64_t>& out, uint64_t n_events,
+                      const PipelineCase& pc) {
     out.clear();
     out.reserve(n_events);
 
@@ -384,6 +405,9 @@ void pipeline_latency(std::vector<uint64_t>& out, uint64_t n_events) {
             t.compute_ns    = stats.compute_ns;
             tick_ring.publish(tseq);
 
+            g_last_rounds   = stats.rounds;
+            g_last_defaults = stats.total_defaults;
+
             samples.push_back(ticks_to_ns(read_timestamp() - t0));
 
             ++read_seq;
@@ -406,14 +430,14 @@ void pipeline_latency(std::vector<uint64_t>& out, uint64_t n_events) {
         const uint64_t seq = h.ring.claim(h.consumer_cursor, g_running);
         if (seq == UINT64_MAX) break;
         ShockPayload& p = h.ring.get(seq);
-        p.target_node_id   = 0;
-        p.shock_type       = 1;
-        p.equities_delta   = -0.30;   // the README's stated scenario
-        p.real_estate_delta = 0.0;
-        p.crypto_delta     = 0.0;
-        p.treasuries_delta = 0.0;
-        p.corp_bonds_delta = 0.0;
-        p.timestamp_ns     = read_timestamp();
+        p.target_node_id    = 0;
+        p.shock_type        = 1;
+        p.equities_delta    = pc.eq;
+        p.real_estate_delta = pc.re;
+        p.crypto_delta      = pc.cr;
+        p.treasuries_delta  = pc.tr;
+        p.corp_bonds_delta  = pc.cb;
+        p.timestamp_ns      = read_timestamp();
         h.ring.publish(seq);
         spin_until_ns(gate, cfg::PIPELINE_PACE_NS);
     }
@@ -550,16 +574,34 @@ int main(int argc, char** argv) {
             std::printf("\n  graph: %u nodes, %u edges (from optirisk_memory.bin)\n",
                         g_pipeline.graph.num_nodes, g_pipeline.graph.num_edges);
 
-            std::vector<uint64_t> s;
-            pipeline_latency(s, cfg::PIPELINE_EVENTS);
-            const Stats st = summarize(s);
-            std::snprintf(cond, sizeof cond,
-                          "%u nodes/%u edges; -30%% equities on node 0; state restored between events (untimed); paced %lluus; pinned=%d",
-                          g_pipeline.graph.num_nodes, g_pipeline.graph.num_edges,
-                          static_cast<unsigned long long>(cfg::PIPELINE_PACE_NS / 1000), pinned);
-            print_stats("D. Full pipeline latency (ring in -> cascade -> TickDelta published)", st, cond);
-            dump_samples(outdir + "/raw_pipeline.csv", s);
-            emit_csv_stats("ring", "pipeline_end_to_end", st, cond);
+            std::printf("\n  D. Full pipeline latency (ring in -> cascade -> TickDelta published)\n");
+            std::printf("     %-16s %-8s %-10s %-11s %-11s\n",
+                        "case", "rounds", "defaults", "p50 (ns)", "p99 (ns)");
+
+            for (const auto& pc : PIPELINE_CASES) {
+                std::vector<uint64_t> s;
+                pipeline_latency(s, cfg::PIPELINE_EVENTS, pc);
+                const Stats st = summarize(s);
+
+                std::printf("     %-16s %-8u %-10u %-11llu %-11llu\n",
+                            pc.name, g_last_rounds, g_last_defaults,
+                            static_cast<unsigned long long>(st.p50_ns),
+                            static_cast<unsigned long long>(st.p99_ns));
+
+                std::snprintf(cond, sizeof cond,
+                              "%s: %u nodes/%u edges, %u rounds, %u defaults; state restored between events (untimed); paced %lluus; pinned=%d",
+                              pc.name, g_pipeline.graph.num_nodes, g_pipeline.graph.num_edges,
+                              g_last_rounds, g_last_defaults,
+                              static_cast<unsigned long long>(cfg::PIPELINE_PACE_NS / 1000), pinned);
+
+                char metric[64];
+                std::snprintf(metric, sizeof metric, "pipeline_%s",
+                              (pc.name[0] == 'n') ? "no_defaults"
+                            : (pc.name[0] == 's') ? "small_cascade" : "large_cascade");
+                print_stats(pc.name, st, cond);
+                dump_samples(outdir + "/raw_pipeline_" + metric + ".csv", s);
+                emit_csv_stats("ring", metric, st, cond);
+            }
         }
     }
 

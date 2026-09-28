@@ -132,6 +132,7 @@ build "$HERE/bench_cascade.cpp"      "$BIN/bench_cascade_nopf"  $QUICKDEF -DOPTI
 build "$HERE/bench_blackscholes.cpp" "$BIN/bench_blackscholes"  $QUICKDEF            || FAIL=1
 build "$HERE/bench_clob.cpp"         "$BIN/bench_clob"          $QUICKDEF            || FAIL=1
 build "$HERE/bench_noise.cpp"        "$BIN/bench_noise"         $QUICKDEF            || FAIL=1
+build "$HERE/bench_convergence.cpp"  "$BIN/bench_convergence"   $QUICKDEF            || FAIL=1
 
 printf '  %-34s' "disasm_probe.o"
 if $CXX $BASE_FLAGS -c "$HERE/disasm_probe.cpp" -o "$BIN/disasm_probe.o" 2> "$OUT/build_disasm.log"; then
@@ -189,6 +190,7 @@ run() {
 }
 
 run "$BIN/bench_noise"         "bench_noise.log"   # first: establishes what the tail is worth
+run "$BIN/bench_convergence"   "bench_convergence.log"  # correctness before any timing
 run "$BIN/bench_ring"          "bench_ring.log"
 run "$BIN/bench_ring_nopf"     "bench_ring_noprefetch.log"
 run "$BIN/bench_cascade"       "bench_cascade.log"
