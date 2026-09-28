@@ -56,7 +56,7 @@ inline void compute_options_m2m(
     const __m256 l5 = _mm256_set1_ps(0.200000000f);
     const __m256 l7 = _mm256_set1_ps(0.142857142f);
 
-    const uint32_t vec_end = count & ~7; // 8 floats per vector
+    const uint32_t vec_end = count & ~7u; // 8 floats per vector; tail handled below
 
     for (uint32_t i = 0; i < vec_end; i += 8) {
         // Load SoA data for 8 options simultaneously
@@ -177,8 +177,16 @@ inline void compute_options_m2m(
         _mm256_store_ps(&out_hedge_volume[i], hedge_vol);
     }
 #else
-    // Scalar fallback handles remaining array tail
-    for (uint32_t i = 0; i < count; ++i) {
+    const uint32_t vec_end = 0;  // no vector path on this target
+#endif
+
+    // Scalar path. On AVX2 this is the TAIL: the vector loop above covers
+    // count & ~7, so without this every option in the final partial group
+    // went unpriced — 4 of 500 in the shipped configuration, and
+    // out_hedge_volume was left holding whatever the caller passed in.
+    // On targets with no vector path, vec_end is 0 and this handles all of
+    // them. Either way every option in [0, count) is priced exactly once.
+    for (uint32_t i = vec_end; i < count; ++i) {
         if (book->positions[i] == 0.0f || book->types[i] == 0.0f) {
             out_hedge_volume[i] = 0.0f;
             continue;
@@ -215,7 +223,6 @@ inline void compute_options_m2m(
 
         book->last_delta[i] = new_delta;
     }
-#endif
 }
 
 } // namespace optirisk::compute

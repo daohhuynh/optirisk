@@ -243,6 +243,47 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── 2c. Tail coverage ──────────────────────────────────────────
+    //
+    // The AVX2 loop covers count & ~7. With count=500 that is 496, so the
+    // last 4 options are the tail. This writes a sentinel into every output
+    // slot first, then checks that the kernel overwrote all 500 — which is
+    // exactly what the tail bug failed to do.
+    {
+        std::printf("\n  2c. TAIL COVERAGE — count=500 (not a multiple of 8)\n");
+        constexpr uint32_t N = 500;
+        constexpr float SENTINEL = -12345.0f;
+        for (uint32_t i = 0; i < N; ++i) {
+            book.strikes[i]   = 480.0f + static_cast<float>(i % 40);
+            book.expiries[i]  = 0.25f;
+            book.iv[i]        = 0.20f;
+            book.rates[i]     = 0.02f;
+            book.types[i]     = 1.0f;
+            book.positions[i] = 1000.0f;
+            book.last_delta[i] = SENTINEL;
+            hedge[i] = SENTINEL;
+        }
+        optirisk::compute::compute_options_m2m(&book, 500.0f, N, hedge.data());
+
+        uint32_t unpriced = 0;
+        uint32_t first_unpriced = N;
+        for (uint32_t i = 0; i < N; ++i) {
+            if (book.last_delta[i] == SENTINEL) {
+                ++unpriced;
+                if (first_unpriced == N) first_unpriced = i;
+            }
+        }
+        std::printf("     vector loop covers : %u of %u\n", N & ~7u, N);
+        std::printf("     options left unpriced: %u%s\n", unpriced,
+                    (unpriced == 0) ? "  <-- tail is covered" : "  <-- TAIL BUG PRESENT");
+        if (unpriced > 0) {
+            std::printf("     first unpriced index : %u\n", first_unpriced);
+        }
+        emit_csv_scalar("blackscholes", "unpriced_tail_options",
+                        static_cast<double>(unpriced), "count",
+                        "count=500; options the kernel never wrote");
+    }
+
     // ── 3. Fast-log accuracy in isolation ──────────────────────────
     std::printf("\n  3. FAST-LOG SERIES vs std::log — error by S/K ratio\n");
     std::printf("     %-10s %-16s %-16s %-12s\n", "S/K", "series", "std::log", "abs err");

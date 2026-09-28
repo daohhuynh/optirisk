@@ -37,21 +37,21 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <new> // std::hardware_destructive_interference_size
 
 #include "network/wire_protocol.hpp"
 
 namespace optirisk::concurrency {
 
 // ── Cache-Line Size ────────────────────────────────────────────────
-// Use the compiler-reported value if available; fall back to 64 bytes
-// (correct for all x86-64 and Apple Silicon).
-#ifdef __cpp_lib_hardware_interference_size
-inline constexpr std::size_t CACHE_LINE =
-    std::hardware_destructive_interference_size;
-#else
+// Fixed at 64 rather than std::hardware_destructive_interference_size.
+// GCC raises -Winterference-size on that constant because its value can
+// change with -mtune and is therefore ABI-unstable; combined with this
+// project's -Werror it is a hard build failure, so the backend would not
+// compile with GCC at all. 64 is correct for every x86-64 part and for
+// Apple Silicon, and a padding constant that silently varies between
+// compilers is a worse foundation for a lock-free ring buffer than one
+// that is simply stated.
 inline constexpr std::size_t CACHE_LINE = 64;
-#endif
 
 // ── Ring Buffer Configuration ──────────────────────────────────────
 inline constexpr std::size_t RING_SIZE = 1024;

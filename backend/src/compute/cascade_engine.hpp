@@ -3,7 +3,7 @@
 // cascade_engine.hpp — Physics Loop Engine
 //
 // Wraps SIMD compute, CSR Graph, and CLOB engine into a deterministic
-// fixed-point cascade loop. Capped at 20 rounds to prevent infinity.
+// fixed-point cascade loop. Capped at MAX_CASCADE_ROUNDS (1024) rounds.
 //
 // Flow: (Shock) → CLOB slippage → Mark-to-market → Liquidation → (Contagion)
 // ============================================================================
