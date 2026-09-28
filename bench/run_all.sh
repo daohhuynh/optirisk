@@ -134,6 +134,13 @@ build "$HERE/bench_clob.cpp"         "$BIN/bench_clob"          $QUICKDEF       
 build "$HERE/bench_noise.cpp"        "$BIN/bench_noise"         $QUICKDEF            || FAIL=1
 build "$HERE/bench_convergence.cpp"  "$BIN/bench_convergence"   $QUICKDEF            || FAIL=1
 
+# Contagion channel ablation: one binary per corner of the 2x2. Compile-time
+# flags rather than a runtime switch, so no variant pays for the others.
+build "$HERE/bench_ablation.cpp" "$BIN/bench_ablation_full"     $QUICKDEF || FAIL=1
+build "$HERE/bench_ablation.cpp" "$BIN/bench_ablation_nogamma"  $QUICKDEF -DOPTIRISK_NO_GAMMA_FEEDBACK || FAIL=1
+build "$HERE/bench_ablation.cpp" "$BIN/bench_ablation_nocp"     $QUICKDEF -DOPTIRISK_NO_COUNTERPARTY_CONTAGION || FAIL=1
+build "$HERE/bench_ablation.cpp" "$BIN/bench_ablation_neither"  $QUICKDEF -DOPTIRISK_NO_GAMMA_FEEDBACK -DOPTIRISK_NO_COUNTERPARTY_CONTAGION || FAIL=1
+
 printf '  %-34s' "disasm_probe.o"
 if $CXX $BASE_FLAGS -c "$HERE/disasm_probe.cpp" -o "$BIN/disasm_probe.o" 2> "$OUT/build_disasm.log"; then
     echo "ok"
@@ -191,6 +198,11 @@ run() {
 
 run "$BIN/bench_noise"         "bench_noise.log"   # first: establishes what the tail is worth
 run "$BIN/bench_convergence"   "bench_convergence.log"  # correctness before any timing
+run "$BIN/bench_ablation_full"    "bench_ablation_full.log"
+run "$BIN/bench_ablation_nogamma" "bench_ablation_nogamma.log"
+run "$BIN/bench_ablation_nocp"    "bench_ablation_nocp.log"
+run "$BIN/bench_ablation_neither" "bench_ablation_neither.log"
+python3 "$HERE/ablation_report.py" "$OUT" 2>&1 | tee "$OUT/ablation_summary.log" || true
 run "$BIN/bench_ring"          "bench_ring.log"
 run "$BIN/bench_ring_nopf"     "bench_ring_noprefetch.log"
 run "$BIN/bench_cascade"       "bench_cascade.log"

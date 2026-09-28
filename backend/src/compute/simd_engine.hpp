@@ -413,6 +413,10 @@ inline CascadeResult run_cascade(optirisk::memory::CSRGraph& graph,
             graph.nodes.risk_score[nid] = 1.0f;
             ++result.defaults_triggered;
 
+            // ABLATION FLAG, measurement only. OPTIRISK_NO_COUNTERPARTY_CONTAGION
+            // removes propagation along CSR edges. The node still defaults on
+            // its own NAV; it just stops pushing risk onto its counterparties.
+#ifndef OPTIRISK_NO_COUNTERPARTY_CONTAGION
             const auto [begin, end] = graph.neighbors(nid);
             if (begin < end) {
                 OPTIRISK_PREFETCH(&graph.edges.col_idx[begin], 0, 3);
@@ -431,6 +435,7 @@ inline CascadeResult run_cascade(optirisk::memory::CSRGraph& graph,
                 if (std::fabs(new_n - old_n) > QUIESCENCE_EPS) ++result.risk_movements;
                 ++result.edges_propagated;
             }
+#endif
         }
         // ── Stress Contagion ─────────────────────────────────────
         // Non-defaulted but heavily stressed nodes still leak risk to
@@ -439,7 +444,12 @@ inline CascadeResult run_cascade(optirisk::memory::CSRGraph& graph,
         // hit may not break any firm in round 0, but the resulting
         // ~0.5 risk scores propagate over a few rounds and eventually
         // push the most-leveraged firms over the line.
+        // Same flag: stress contagion is the other edge-propagation path.
+#ifdef OPTIRISK_NO_COUNTERPARTY_CONTAGION
+        else if (false) {
+#else
         else if (risk > STRESS_THRESH) {
+#endif
             const auto [begin, end] = graph.neighbors(nid);
             for (uint32_t e = begin; e < end; ++e) {
                 const uint32_t neighbor = graph.edges.col_idx[e];
