@@ -11,49 +11,65 @@ for the hardware, methodology, and raw per-sample distributions.
 
 ## The Critical Path
 
-Measured on a GitHub-hosted x86-64 runner (AVX2, GCC 13.3, threads pinned), with the
-machine's own noise floor characterised first so the percentiles are known to be signal
-rather than interference. Ingress and egress remain **engineering estimates** — they are
-not instrumented, and are labelled as such.
+Every figure in this section comes from a single run on one machine: an AMD EPYC 7763
+(4 cores, AVX2, no AVX-512), GCC 13.3, Ubuntu 24.04, threads pinned via
+`pthread_setaffinity_np`. Mixing numbers from different runs or different CPUs would make
+the ratios meaningless, so the suite records the machine alongside every result.
+
+That machine's own noise floor was characterised first, by timing byte-identical work:
+inflation over p50 is 1.00x at p99 and 1.39x at p99.9. So **p99 here is signal and p99.9
+is not**, and no p99.9 is quoted below. Ingress and egress remain **engineering
+estimates**: they are not instrumented, and are labelled as such.
 
 | Stage | Measured | Notes |
 |---|---|---|
-| Disruptor ring handoff | **36 ns p50 / 49 ns p99** | SPSC, paced to queue depth ~1; 0.0% p99 spread over 5 runs |
-| Full pipeline (shock in → TickDelta published) | **9.6 µs p50 / 16.3 µs p99** | 500 nodes / 7500 edges, −30% equities |
-| `run_cascade_tick` alone | **7.2 µs p50** | same shock; see the caveat below |
-| `apply_shock_simd` (SIMD phases only) | **1.7 µs p50** | 2 SIMD sweeps + scalar cascade pass |
-| Ingress (uWS frame → ring) | ~200 ns | **estimate, not instrumented** |
-| Egress (TickDelta → socket) | ~500 ns | **estimate, not instrumented** |
+| Disruptor ring handoff | **42 ns p50 / 72 ns p99** | SPSC, paced to queue depth ~1; p99 landed on 72 or 82 ns across 5 runs, a spread of one ~10 ns timer tick |
+| Full pipeline (shock in to TickDelta published) | **10.7 µs p50 / 23.4 µs p99** | 500 nodes / 7500 edges, -30% equities |
+| `run_cascade_tick` alone | **7.03 µs p50** | same shock; see the caveat below |
+| `apply_shock_simd` (SIMD phases only) | **1.78 µs p50** | 2 SIMD sweeps + scalar cascade pass |
+| Ingress (uWS frame to ring) | ~200 ns | **estimate, not instrumented** |
+| Egress (TickDelta to socket) | ~500 ns | **estimate, not instrumented** |
 
 > **Read the cascade number carefully.** `run_cascade_tick()` iterates to quiescence, so
-> its cost is a function of the shock, not a constant. A −30% equities shock on the
-> 500-node graph settles in **2 rounds and triggers zero defaults** — 7.2 µs buys you an
-> equilibrium check, not a contagion cascade. Severe shocks (−80% equities, or −50%
-> across all five classes) run to the `MAX_CASCADE_ROUNDS = 1024` cap and cost **2.5 ms**.
-> Any single latency number for this function is meaningless without the shock vector.
+> its cost is a function of the shock, not a constant. A -30% equities shock on the
+> 500-node graph settles in **2 rounds and triggers zero defaults**, so 7.03 µs buys an
+> equilibrium check, not a contagion cascade. Severe shocks (-80% equities, or -50%
+> across all five classes) run to the `MAX_CASCADE_ROUNDS = 1024` cap and cost **2.5 ms**,
+> roughly 350x more. Any single latency number for this function is meaningless without
+> the shock vector.
 
 The engine's data flow is strictly segmented across three CPU-pinned threads communicating via `std::atomic` cursors with explicit memory ordering (`memory_order_release`/`memory_order_acquire`).
 
-* **Ingress (Thread 1 - Core 1):** uWebSockets event loop ingests data via binary frame parsing. Payloads are copied directly into a 56-byte `#pragma pack(1)` struct via `memcpy`. Zero string parsing, zero JSON, zero dynamic allocation in our code — though the uWS event loop itself blocks in `epoll`/`kqueue` and allocates, so the *lock-free* property applies to the Compute→Broadcast path, not to ingress.
-* **Compute (Thread 2 - Core 2):** Spins via PAUSE/YIELD instructions. The risk cascade computes in three phases: SIMD Exposure Update (2500 FMA ops), SIMD NAV Recomputation (ILP-optimized addition tree with a 2-cycle critical path), and Cascade BFS (Scalar with explicit `__builtin_prefetch` fetching 4 cache lines ahead). See the table above for measured figures. Timings come from `read_timestamp()`, whose tick rate is resolved at startup by `calibrate_timestamp_clock()` — neither RDTSC nor `CNTVCT_EL0` ticks at the core clock, so durations are never derived from an assumed GHz.
+* **Ingress (Thread 1 - Core 1):** uWebSockets event loop ingests data via binary frame parsing. Payloads are copied directly into a 56-byte `#pragma pack(1)` struct via `memcpy`. Zero string parsing, zero JSON, zero dynamic allocation in our code, though the uWS event loop itself blocks in `epoll`/`kqueue` and allocates, so the *lock-free* property applies to the Compute→Broadcast path, not to ingress.
+* **Compute (Thread 2 - Core 2):** Spins via PAUSE/YIELD instructions. The risk cascade computes in three phases: SIMD Exposure Update (2500 FMA ops), SIMD NAV Recomputation (ILP-optimized addition tree with a 2-cycle critical path), and Cascade BFS (Scalar with explicit `__builtin_prefetch` fetching 4 cache lines ahead). See the table above for measured figures. Timings come from `read_timestamp()`, whose tick rate is resolved at startup by `calibrate_timestamp_clock()`, neither RDTSC nor `CNTVCT_EL0` ticks at the core clock, so durations are never derived from an assumed GHz.
 * **Egress (Thread 3 - Core 3):** Broadcasts state updates via TCP (uWS) and UDP POSIX `sendto` multicast. Network serialization is strictly zero-copy, utilizing scatter-gather I/O (`sendmsg` with `iovec` arrays) directly into the socket buffer. Estimated latency: **~500ns** (not instrumented).
 
 ## Memory & Cache Architecture
 
-Dynamic memory allocation is entirely banned on the hot path. The system is designed to fit entirely within the L2 cache of modern processors to prevent main-memory roundtrips.
+Dynamic memory allocation is entirely banned on the hot path. The whole working set is statically allocated and small enough to sit close to the core, though not with room to spare: on the EPYC 7763 above, L2 is 512 KB per core and the total below is 508 KB.
 
-* **Zero-Allocation .bss Footprint:** The entire graph is statically allocated (158 KB), alongside the ring buffers (128 KB), CLOB double-buffers (64 KB), and the Options book (16 KB). The total hot-path memory is roughly **382 KB**.
+* **Zero-Allocation .bss Footprint:** Sizes below are `sizeof()` on the shipped structs, not estimates.
+
+  | Structure | Size |
+  |---|---|
+  | `CSRGraph` (`NodeData` 43.0 KB + `CSREdges` 98.0 KB) | 141.1 KB |
+  | Both ring buffers (`ShockPayload` + `TickDelta`) | 128.1 KB |
+  | `CLOBEngine`, of which BBO double-buffers are 64.0 KB | 224.4 KB |
+  | `OptionsBook` | 14.0 KB |
+  | **Total hot-path memory** | **507.6 KB** |
+
+  The CLOB dominates: five books at 256 bid and 256 ask levels, each `PriceLevel` padded to a 64-byte cache line, is 160 KB of price levels alone.
 * **CSR Struct-of-Arrays (SoA) Layout:** The graph utilizes a Compressed Sparse Row (CSR) format mapping `row_ptr`, `col_idx`, and `weight` arrays (98 KB total). The SoA layout ensures sequential access patterns that saturate the hardware prefetcher, achieving 100% cache-line utilization with zero padding waste. Graph traversal executes in strict $O(V + E)$ time.
-* **Explicit prefetching helps one workload and hurts another.** The eight `__builtin_prefetch` calls in `simd_engine.hpp` were ablated against an otherwise identical build (`-DOPTIRISK_NO_PREFETCH`), both binaries compiled and run in the same job so the comparison is same-machine. On the isolated SIMD sweep (`apply_shock_simd`) they are worth **+17 to +19% on AMD EPYC** and **neutral on Intel Xeon**. On the full cascade they are a consistent **loss of 8–12% on both**. The plausible reading: the sweeps are linear SoA strides the hardware prefetcher already handles, and inside the full cascade the hints evict lines the CLOB and options book still need. Retained behind the flag so the result stays reproducible either way.
+* **Explicit prefetching helps one workload and hurts another.** The eight `__builtin_prefetch` calls in `simd_engine.hpp` were ablated against an otherwise identical build (`-DOPTIRISK_NO_PREFETCH`), both binaries compiled and run in the same job so the comparison is same-machine. On the isolated SIMD sweep (`apply_shock_simd`) they are worth **+17 to +19% on AMD EPYC** and **neutral on Intel Xeon**. On the full cascade they are a consistent **loss of 8 to 12% on both**. The plausible reading: the sweeps are linear SoA strides the hardware prefetcher already handles, and inside the full cascade the hints evict lines the CLOB and options book still need. Retained behind the flag so the result stays reproducible either way.
 * **False Sharing Prevention:** Cross-core cache-line bouncing is eliminated by padding all atomic cursors, CLOB buffers, and SPSC ring buffer slots with explicit `alignas(64)` directives. Each pinned thread owns exclusive cache lines.
 
 ## Central Limit Order Book
 
-The CLOB simulates forced liquidations across 5 global asset classes (Equities, Real Estate, Crypto, Treasuries, Corp Bonds) with realistic baseline prices and depth profiles. It models the slippage penalty incurred when a counterparty default forces a fire-sale into illiquid markets — the core mechanism by which contagion propagates through the network.
+The CLOB simulates forced liquidations across 5 global asset classes (Equities, Real Estate, Crypto, Treasuries, Corp Bonds) with realistic baseline prices and depth profiles. It models the slippage penalty incurred when a counterparty default forces a fire-sale into illiquid markets, the core mechanism by which contagion propagates through the network.
 
-* **Depth-Walking Liquidation:** `market_sell` / `market_buy` walk the bid/ask stacks level-by-level, filling against available depth and returning a `FillResult` containing average fill price, total proceeds, slippage vs. pre-trade mid, and the count of price levels consumed. The hot path is `__attribute__((always_inline))` annotated and `[[unlikely]]`-hinted on the empty-book guard. (The depth-walking loop itself is branch-driven — the branchless work lives in the Black-Scholes kernel, below.) Measured at **50 ns p50 / 110 ns p99** per fill.
-* **Lazy Head-Increment Matching:** Consumed price levels are not erased mid-array (which would trigger $O(N)$ shifts and cache invalidation). Instead, a `bids_head` / `asks_head` pointer increments past depleted levels, leaving fills $O(\text{levels consumed})$ with zero memory movement. **Verified empirically in both directions:** cost is flat in book depth (14 ns at depth 8 and at depth 256, one level consumed) and linear in levels consumed (13 ns at 1 level → 549 ns at 256).
-* **Ping-Pong BBO Double-Buffer:** The `CLOBEngine` maintains two `alignas(64)` BBO update buffers and an `std::atomic<uint8_t> active_buffer_idx`. The compute thread writes into the active buffer; the broadcast thread reads the inactive one. Buffer flips use `memory_order_release` on the store and `memory_order_acquire` on the read, guaranteeing the broadcast thread never observes a half-written packet stream. This eliminates the standard producer/consumer mutex without sacrificing correctness. Flip-to-observed latency measures **45 ns p50 / 57 ns p99**.
+* **Depth-Walking Liquidation:** `market_sell` / `market_buy` walk the bid/ask stacks level-by-level, filling against available depth and returning a `FillResult` containing average fill price, total proceeds, slippage vs. pre-trade mid, and the count of price levels consumed. The hot path is `__attribute__((always_inline))` annotated and `[[unlikely]]`-hinted on the empty-book guard. (The depth-walking loop itself is branch-driven, the branchless work lives in the Black-Scholes kernel, below.) Measured at **40 ns p50 / 80 ns p99** per fill, sustaining 2.47 M fills/s.
+* **Lazy Head-Increment Matching:** Consumed price levels are not erased mid-array (which would trigger $O(N)$ shifts and cache invalidation). Instead, a `bids_head` / `asks_head` pointer increments past depleted levels, leaving fills $O(\text{levels consumed})$ with zero memory movement. **Verified empirically in both directions:** cost is flat in book depth (10 ns p50 at depth 8 and at depth 256, one level consumed) and linear in levels consumed (10 ns at 1 level, 410 ns at 256).
+* **Ping-Pong BBO Double-Buffer:** The `CLOBEngine` maintains two `alignas(64)` BBO update buffers and an `std::atomic<uint8_t> active_buffer_idx`. The compute thread writes into the active buffer; the broadcast thread reads the inactive one. Buffer flips use `memory_order_release` on the store and `memory_order_acquire` on the read, guaranteeing the broadcast thread never observes a half-written packet stream. This eliminates the standard producer/consumer mutex without sacrificing correctness. Flip-to-observed latency measures **42 ns p50 / 82 ns p99**.
 * **Cache-Aligned Storage:** Both `OrderBook` and `PriceLevel` are `alignas(64)` to match cache-line boundaries. The 5-asset book array is statically allocated as `std::array<OrderBook, 5>`, fully embedded in the engine's `.bss` footprint with zero heap touches.
 * **Macro Shock Operator:** `apply_macro_shock(delta)` multiplies every active price level by `(1 + delta)` in a tight loop, modeling instantaneous market-wide repricing events without rebuilding the book.
 
@@ -61,29 +77,29 @@ The CLOB simulates forced liquidations across 5 global asset classes (Equities, 
 
 Pipeline stalls and branch mispredictions are lethal to microsecond determinism. OptiRisk utilizes explicit hardware-level control flows:
 
-* **AVX2/FMA3 Intrinsics:** The engine leverages pipelined FMA instructions (`_mm256_fmadd_pd`). The 8-lane AVX2 kernel computes option **delta** (not price, and no second-order Greeks): fast logarithms via 6 FMAs, Normal CDF via the Abramowitz & Stegun 7.1.28 degree-6 $(1 + a_1x + \dots + a_6x^6)^{-16}$ form, and division via 14-bit reciprocal approximation (`_mm256_rcp_ps`) plus one Newton-Raphson refinement, bypassing 20-cycle hardware division. Measured at **640 M options/s single-core, 11.7× a double-precision `std::erfc` scalar baseline**. Accuracy against that f64 reference over a 9,072-point (spot, strike, vol, rate, expiry) grid: **max absolute delta error $7.4\times10^{-7}$**, mean $1.4\times10^{-7}$. The fast-log series holds to $1.2\times10^{-7}$ over $S/K \in [0.7, 1.5]$ and the refined reciprocal to $1.6\times10^{-7}$ relative.
-  * The polynomial is evaluated in `float`, and $y = |d_1|/\sqrt2$ is saturated at 10 before it. Without that clamp the 16th power overflows `float32` to $+\infty$, `_mm256_rcp_ps(\infty)` returns 0, and the Newton-Raphson step yields $2 - \infty \times 0 = $ **NaN** — which it did for 126 of those 9,072 points, concentrated in deep-OTM short-dated options. Since $\mathrm{erfc}(10) \approx 2\times10^{-45}$ is below `float32`'s smallest normal, the clamp returns the exact single-precision limit and changes no previously-finite result.
-* **Branchless Arithmetic:** Absolute values use bitwise AND masking (`0x7FFFFFFF`), Call/Put deltas resolve via blends (`_mm256_blendv_ps`), and ring indexing uses bitmask modulo (`seq & RING_MASK`). The *arithmetic* is branchless; the enclosing loop is not — `objdump` of the compiled kernel shows **4 conditional jumps**, including a data-dependent early-out for all-zero position groups. Hot paths carry `[[likely]]` / `[[unlikely]]` hints.
-* **Lock-Free Concurrency:** The LMAX Disruptor pattern ensures zero mutexes and zero OS-level blocking on the compute path. Producer back-pressure spin-waits when the ring buffer reaches a 1024-slot delta, preventing unbounded memory growth. Measured against a `std::mutex` + `std::queue` + `condition_variable` transport carrying the identical payload at the identical arrival rate: **36 ns vs 2,342 ns at p50 (65×)** and **49 ns vs 6,838 ns at p99 (140×)**, with saturated throughput of **52.0 M vs 5.5 M events/s (9.4×)**.
+* **AVX2/FMA3 Intrinsics:** The engine leverages pipelined FMA instructions (`_mm256_fmadd_pd`). The 8-lane AVX2 kernel computes option **delta** (not price, and no second-order Greeks): fast logarithms via 6 FMAs, Normal CDF via the Abramowitz & Stegun 7.1.28 degree-6 $(1 + a_1x + \dots + a_6x^6)^{-16}$ form, and division via 14-bit reciprocal approximation (`_mm256_rcp_ps`) plus one Newton-Raphson refinement, bypassing 20-cycle hardware division. Measured at **688 M options/s single-core, 12.6x a double-precision `std::erfc` scalar baseline**. Accuracy against that f64 reference over a 9,072-point (spot, strike, vol, rate, expiry) grid: **max absolute delta error $7.4\times10^{-7}$**, mean $1.4\times10^{-7}$. The fast-log series holds to $1.2\times10^{-7}$ over $S/K \in [0.7, 1.5]$ and the refined reciprocal to $1.6\times10^{-7}$ relative.
+  * The polynomial is evaluated in `float`, and $y = |d_1|/\sqrt2$ is saturated at 10 before it. Without that clamp the 16th power overflows `float32` to $+\infty$, `_mm256_rcp_ps(\infty)` returns 0, and the Newton-Raphson step yields $2 - \infty \times 0 = $ **NaN**, which it did for 126 of those 9,072 points, concentrated in deep-OTM short-dated options. Since $\mathrm{erfc}(10) \approx 2\times10^{-45}$ is below `float32`'s smallest normal, the clamp returns the exact single-precision limit and changes no previously-finite result.
+* **Branchless Arithmetic:** Absolute values use bitwise AND masking (`0x7FFFFFFF`), Call/Put deltas resolve via blends (`_mm256_blendv_ps`), and ring indexing uses bitmask modulo (`seq & RING_MASK`). The *arithmetic* is branchless; the enclosing loop is not. `objdump` of the compiled kernel shows **12 conditional jumps**, including a data-dependent early-out for all-zero position groups. That count rose from 4 when the scalar tail loop was moved out of the `#else` so that x86 prices every option rather than silently skipping the final partial group of 8; carrying both loops costs branches, and pricing all 500 options is worth more than the lower number. Hot paths carry `[[likely]]` / `[[unlikely]]` hints.
+* **Lock-Free Concurrency:** The LMAX Disruptor pattern ensures zero mutexes and zero OS-level blocking on the compute path. Producer back-pressure spin-waits when the ring buffer reaches a 1024-slot delta, preventing unbounded memory growth. Measured against a `std::mutex` + `std::queue` + `condition_variable` transport carrying the identical payload at the identical arrival rate, bounded to the same 1024 slots: **42 ns vs 5,593 ns at p50 (133x)** and **72 ns vs 17,946 ns at p99 (249x)**, with saturated throughput of **47.3 M vs 4.5 M events/s (10.6x)**.
 
 ## Quantitative Math & Numerical Stability
 
 To handle ill-conditioned, real-world financial data, OptiRisk implements mathematical stabilizers explicitly engineered to prevent accumulation errors and catastrophic cancellations.
 
-* **Sinkhorn-Knopp Matrix Balancing:** Maximum entropy bilateral exposure inference is solved via a convex Alternating Scaling (RAS) method. Operating at $O(n^2 \times \text{iterations})$, the $500 \times 500$ dense matrix converges in 200 iterations. To prevent division-by-zero, row and column sums are strictly clamped to $\ge 1e^{-3}$.
+* **Sinkhorn-Knopp Matrix Balancing:** Maximum entropy bilateral exposure inference is solved via an Alternating Scaling (RAS) method. Operating at $O(n^2 \times \text{iterations})$, the $500 \times 500$ dense matrix is run for a fixed `max_iter=200` sweeps. Note there is no convergence test in the loop: it performs 200 iterations unconditionally, and residual convergence is not measured. Division-by-zero is avoided by replacing exactly-zero row and column sums with 1.0 before scaling, not by a threshold clamp.
 * **Merton Distance-to-Default:** The structural credit model computes PD bounds via rank-based volatilities (ranging from 15% for mega-banks to 80% for volatile firms). Asset and liability vectors are clamped to prevent $\log(0)$ instability.
 * **Student-T Copula Margins:** Tail risk is modeled by transforming Gaussian copulas to inverse Student-T distributions. Fat tails for crypto asset classes are aggressively modeled at $df=2.5$, while standard equities and real estate default to $df=4.0$. 
-* **Welford's Online VaR:** 1024 Monte Carlo paths are executed across 500 nodes ($O(\text{paths} \times \text{nodes})$). Welford's two-pass algorithm computes the moving variance without catastrophic cancellation and with absolute zero heap allocation, utilizing purely stack-resident arrays for state management.
+* **Welford's Online VaR:** `MC_PATHS = 1024` paths are executed across 500 nodes ($O(\text{paths} \times \text{nodes})$). Welford's algorithm is single-pass and online, updating mean and $M_2$ per sample, which computes variance without catastrophic cancellation and without storing the paths. Zero heap allocation: state lives in stack-resident `std::array`s.
 
-## Frontend — the cinematic map
+## Frontend: the cinematic map
 
 Located in `frontend/`. Next.js 15 (App Router) + TypeScript + Tailwind.
 
 ### Rendering stack
 
-- **MapLibre** — dark basemap providing geographic context
-- **deck.gl** — GPU-accelerated layers on top of the map (nodes, edges, labels, hub blobs, focus highlights). See `components/map/layers/`.
-- **React** — manages app structure only; it never re-renders the graph itself.
+- **MapLibre**: dark basemap providing geographic context
+- **deck.gl**: GPU-accelerated layers on top of the map (nodes, edges, labels, hub blobs, focus highlights). See `components/map/layers/`.
+- **React**: manages app structure only; it never re-renders the graph itself.
 
 > Note: this project uses MapLibre + deck.gl, **not** React Three Fiber. The graph is a geo graph, not a free-floating force graph.
 
@@ -110,7 +126,7 @@ Outbound shocks take the symmetric path: the browser POSTs a base64-encoded `Sho
 
 ### Display pacing
 
-The backend ticks at ~10 Hz, which would make the cascade finish in <1 second — too fast for a human to follow. So `websocket.ts` buffers incoming `TickDelta`s **grouped by `tick_seq`** and drains one batch every 400 ms. The backend keeps computing at full speed; the user sees a wave.
+The backend ticks at ~10 Hz, which would make the cascade finish in <1 second, too fast for a human to follow. So `websocket.ts` buffers incoming `TickDelta`s **grouped by `tick_seq`** and drains one batch every 400 ms. The backend keeps computing at full speed; the user sees a wave.
 
 ### The chat / AI layer
 
@@ -118,7 +134,7 @@ The backend ticks at ~10 Hz, which would make the cascade finish in <1 second �
 
 ### UI shell
 
-`app/page.tsx` is short and tells the whole story: full-screen `<MapContainer />` underneath, with floating HUD panels — `TopControls`, `NodeInfoCard` / `CityHubPanel`, `ChatPanel`, `StatusBar`. Dark, Obsidian-inspired aesthetic, all Tailwind.
+`app/page.tsx` is short and tells the whole story: full-screen `<MapContainer />` underneath, with floating HUD panels, `TopControls`, `NodeInfoCard` / `CityHubPanel`, `ChatPanel`, `StatusBar`. Dark, Obsidian-inspired aesthetic, all Tailwind.
 
 ---
 
@@ -178,12 +194,12 @@ Open [http://localhost:3000](http://localhost:3000). The page boots the SSE brid
 
 ## Suggested code-tour order
 
-1. `app/page.tsx` — the entire UI shell in ~50 lines.
-2. `README.md` architecture diagram — how data flows.
-3. `backend/src/main.cpp` — the three threads, one file.
-4. `backend/src/memory/csr_graph.hpp` — the whole 500-node network in one stack-allocated struct.
-5. `backend/src/market/order_book.hpp` — the CLOB, depth-walking matching, and ping-pong BBO double-buffer.
-6. `backend/src/network/wire_protocol.hpp` next to `frontend/lib/binary/schema.ts` — the binary contract.
+1. `app/page.tsx`: the entire UI shell in ~50 lines.
+2. `README.md` architecture diagram, how data flows.
+3. `backend/src/main.cpp`: the three threads, one file.
+4. `backend/src/memory/csr_graph.hpp`: the whole 500-node network in one stack-allocated struct.
+5. `backend/src/market/order_book.hpp`: the CLOB, depth-walking matching, and ping-pong BBO double-buffer.
+6. `backend/src/network/wire_protocol.hpp` next to `frontend/lib/binary/schema.ts`, the binary contract.
 7. Run it, click a shock, watch the cascade.
 
 ---
