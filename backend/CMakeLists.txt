@@ -53,5 +53,32 @@ target_link_libraries(optirisk PRIVATE
     z   # zlib — required by uWebSockets for permessage-deflate (even if disabled)
 )
 
+# ── Tests ───────────────────────────────────────────────────────────
+# Standalone test binaries, one per subsystem. These were previously built by
+# hand and silently rotted out of sync with the headers (test_cascade_engine
+# stopped compiling when run_cascade_tick gained its OptionsBook parameter).
+# Building them as part of the default target keeps that from recurring.
+option(OPTIRISK_BUILD_TESTS "Build the standalone subsystem test binaries" ON)
+
+if(OPTIRISK_BUILD_TESTS)
+    enable_testing()
+
+    set(OPTIRISK_TESTS
+        src/concurrency/test_disruptor.cpp
+        src/network/test_wire_protocol.cpp
+        src/compute/test_simd_engine.cpp
+        src/compute/test_cascade_engine.cpp
+        src/compute/test_monte_carlo.cpp
+        src/market/test_order_book.cpp
+    )
+
+    foreach(test_src IN LISTS OPTIRISK_TESTS)
+        get_filename_component(test_name ${test_src} NAME_WE)
+        add_executable(${test_name} ${test_src})
+        target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        add_test(NAME ${test_name} COMMAND ${test_name})
+    endforeach()
+endif()
+
 # ── Compile Commands (for IDE integration) ──────────────────────────
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

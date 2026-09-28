@@ -4,15 +4,18 @@
 
 OptiRisk is a high-performance counterparty credit-risk engine that models cascading default propagation across a 500-node financial network. Architected identically to a Tier-1 trading system, it features a bare-metal C++23 backend and a strict binary wire contract to a Next.js/WebGL frontend. 
 
-The system operates with a strict zero-allocation hot path, achieving an end-to-end network-to-execution latency of **~21μs**, leveraging LMAX Disruptor ring buffers, AVX2 vectorization, and cache-optimal Struct-of-Arrays (SoA) layouts.
+The system operates with a strict zero-allocation hot path, achieving an end-to-end network-to-execution latency of **~11μs**, leveraging LMAX Disruptor ring buffers, AVX2 vectorization, and cache-optimal Struct-of-Arrays (SoA) layouts.
 
-## The Critical Path: 21μs End-to-End Latency
+## The Critical Path: ~11μs End-to-End Latency
+
+Compute-stage timings below are **measured** (see Benchmarks); the ingress and egress
+figures are **engineering estimates** and have not been instrumented end-to-end.
 
 The engine's data flow is strictly segmented across three CPU-pinned threads communicating via `std::atomic` cursors with explicit memory ordering (`memory_order_release`/`memory_order_acquire`).
 
-* **Ingress (Thread 1 - Core 1):** uWebSockets event loop ingests data via binary frame parsing. Payloads are copied directly into a 56-byte `#pragma pack(1)` struct via `memcpy`. The system utilizes zero string parsing, zero JSON overhead, and zero dynamic allocation. Latency: **~200ns**.
-* **Compute (Thread 2 - Core 2):** Spins via PAUSE/YIELD instructions. The risk cascade computes in three phases: SIMD Exposure Update (2500 FMA ops computing in ~625 cycles), SIMD NAV Recomputation (ILP-optimized addition tree with a 2-cycle critical path), and Cascade BFS (Scalar with explicit `__builtin_prefetch` fetching 4 cache lines ahead). Total compute latency scales to **~20μs @ 3GHz**, verified via RDTSC hardware cycle counters.
-* **Egress (Thread 3 - Core 3):** Broadcasts state updates via TCP (uWS) and UDP POSIX `sendto` multicast. Network serialization is strictly zero-copy, utilizing scatter-gather I/O (`sendmsg` with `iovec` arrays) directly into the socket buffer. Latency: **~500ns**.
+* **Ingress (Thread 1 - Core 1):** uWebSockets event loop ingests data via binary frame parsing. Payloads are copied directly into a 56-byte `#pragma pack(1)` struct via `memcpy`. The system utilizes zero string parsing, zero JSON overhead, and zero dynamic allocation. Estimated latency: **~200ns** (not instrumented).
+* **Compute (Thread 2 - Core 2):** Spins via PAUSE/YIELD instructions. The risk cascade computes in three phases: SIMD Exposure Update (2500 FMA ops), SIMD NAV Recomputation (ILP-optimized addition tree with a 2-cycle critical path), and Cascade BFS (Scalar with explicit `__builtin_prefetch` fetching 4 cache lines ahead). A full `run_cascade_tick()` measures **~10μs** steady-state (9.0–11.0μs over 7 runs; ~18μs on the first, cold-cache run) for a −30% equities shock on a 500-node / 7500-edge graph, measured on Apple Silicon via the NEON path. The SIMD phases alone are **~414ns**, and the Disruptor ring handoff is **~125ns p50 / 208ns p99** measured unsaturated at queue depth 1. Timings come from `read_timestamp()`, whose tick rate is resolved at startup by `calibrate_timestamp_clock()` — note that neither RDTSC nor `CNTVCT_EL0` ticks at the core clock, so durations are never derived from an assumed GHz.
+* **Egress (Thread 3 - Core 3):** Broadcasts state updates via TCP (uWS) and UDP POSIX `sendto` multicast. Network serialization is strictly zero-copy, utilizing scatter-gather I/O (`sendmsg` with `iovec` arrays) directly into the socket buffer. Estimated latency: **~500ns** (not instrumented).
 
 ## Memory & Cache Architecture
 
@@ -26,7 +29,7 @@ Dynamic memory allocation is entirely banned on the hot path. The system is desi
 
 The CLOB simulates forced liquidations across 5 global asset classes (Equities, Real Estate, Crypto, Treasuries, Corp Bonds) with realistic baseline prices and depth profiles. It models the slippage penalty incurred when a counterparty default forces a fire-sale into illiquid markets — the core mechanism by which contagion propagates through the network.
 
-* **Depth-Walking Liquidation:** `market_sell` / `market_buy` walk the bid/ask stacks level-by-level, filling against available depth and returning a `FillResult` containing average fill price, total proceeds, slippage vs. pre-trade mid, and the count of price levels consumed. The hot path is `__attribute__((always_inline))` annotated, branchless, and `[[unlikely]]`-hinted on the empty-book guard.
+* **Depth-Walking Liquidation:** `market_sell` / `market_buy` walk the bid/ask stacks level-by-level, filling against available depth and returning a `FillResult` containing average fill price, total proceeds, slippage vs. pre-trade mid, and the count of price levels consumed. The hot path is `__attribute__((always_inline))` annotated and `[[unlikely]]`-hinted on the empty-book guard. (The depth-walking loop itself is branch-driven — the branchless work lives in the Black-Scholes kernel, below.)
 * **Lazy Head-Increment Matching:** Consumed price levels are not erased mid-array (which would trigger $O(N)$ shifts and cache invalidation). Instead, a `bids_head` / `asks_head` pointer increments past depleted levels, leaving fills $O(\text{levels consumed})$ with zero memory movement.
 * **Ping-Pong BBO Double-Buffer:** The `CLOBEngine` maintains two `alignas(64)` BBO update buffers and an `std::atomic<uint8_t> active_buffer_idx`. The compute thread writes into the active buffer; the broadcast thread reads the inactive one. Buffer flips use `memory_order_release` on the store and `memory_order_acquire` on the read, guaranteeing the broadcast thread never observes a half-written packet stream. This eliminates the standard producer/consumer mutex without sacrificing correctness.
 * **Cache-Aligned Storage:** Both `OrderBook` and `PriceLevel` are `alignas(64)` to match cache-line boundaries. The 5-asset book array is statically allocated as `std::array<OrderBook, 5>`, fully embedded in the engine's `.bss` footprint with zero heap touches.
@@ -36,7 +39,7 @@ The CLOB simulates forced liquidations across 5 global asset classes (Equities, 
 
 Pipeline stalls and branch mispredictions are lethal to microsecond determinism. OptiRisk utilizes explicit hardware-level control flows:
 
-* **AVX2/FMA3 Intrinsics:** The engine leverages pipelined FMA instructions (`_mm256_fmadd_pd`). The 8-lane AVX2 Black-Scholes pricing kernel computes fast logarithms via 6 FMA instructions, approximates Normal CDF using the Abramowitz & Stegun 7.1.27 polynomial, and handles division via 14-bit reciprocal approximation (`_mm256_rcp_ps`) followed by a single Newton-Raphson refinement for a 7-cycle yield (bypassing 20-cycle hardware division).
+* **AVX2/FMA3 Intrinsics:** The engine leverages pipelined FMA instructions (`_mm256_fmadd_pd`). The 8-lane AVX2 Black-Scholes pricing kernel computes fast logarithms via 6 FMA instructions, approximates Normal CDF using the Abramowitz & Stegun 7.1.28 polynomial (the degree-6 $(1 + a_1x + \dots + a_6x^6)^{-16}$ form). Its published bound is $|\epsilon| \le 3\times10^{-7}$, which holds in double precision (measured max $2.60\times10^{-7}$ over $x \in [0,6]$); the kernel evaluates it in `float`, where realized error is $\approx 3.4\times10^{-6}$ — ample for a delta hedge, but not the textbook figure. and handles division via 14-bit reciprocal approximation (`_mm256_rcp_ps`) followed by a single Newton-Raphson refinement for a 7-cycle yield (bypassing 20-cycle hardware division).
 * **Branchless Execution:** The system explicitly avoids branch mispredictions. Absolute values utilize bitwise AND masking (`0x7FFFFFFF`). Call/Put deltas are resolved via CMOV-style blends (`_mm256_blendv_ps`). Ring buffer indexing utilizes bitmask modulo (`seq & RING_MASK`). All hot paths are annotated with `[[likely]]` / `[[unlikely]]` compiler hints.
 * **Lock-Free Concurrency:** The LMAX Disruptor pattern ensures zero mutexes and zero OS-level blocking. Producer back-pressure spin-waits when the ring buffer reaches a 1024-slot delta, preventing unbounded memory growth.
 

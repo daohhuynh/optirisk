@@ -77,12 +77,15 @@ static void test_var_engine() {
 
     std::printf("  Node 0 | Expected Loss: $%.2f | 95%% VaR: $%.2f\n", 
                 res.expected[0], res.var_95[0]);
-    std::printf("  Cycles: %llu (%.2f ns | %.2f μs)\n", 
-                static_cast<unsigned long long>(res.compute_cycles),
-                res.compute_cycles * 0.041, res.compute_cycles * 0.000041);
+    std::printf("  Compute: %llu ns (%.2f μs)\n",
+                static_cast<unsigned long long>(res.compute_ns),
+                static_cast<double>(res.compute_ns) / 1000.0);
 }
 
 int main() {
+    // Resolve the timestamp counter rate before any compute_ns is recorded.
+    calibrate_timestamp_clock();
+
     std::printf("═══════════════════════════════════════════\n");
     std::printf("  OptiRisk — Monte Carlo VaR Tests\n");
     std::printf("═══════════════════════════════════════════\n\n");

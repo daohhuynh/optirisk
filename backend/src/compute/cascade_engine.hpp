@@ -30,7 +30,7 @@ struct CascadeStats {
     uint32_t total_defaults;
     uint32_t total_liquidations;
     double   total_slippage;
-    uint64_t compute_cycles;
+    uint64_t compute_ns;   // Wall-clock nanoseconds for the whole cascade
 };
 
 // ── Fixed-Point Cascade Simulator ───────────────────────────────────────
@@ -43,7 +43,7 @@ inline CascadeStats run_cascade_tick(
     optirisk::memory::OptionsBook& options,
     const optirisk::network::ShockPayload& shock
 ) noexcept {
-    const uint64_t start_cycles = read_cycles();
+    const uint64_t start_ticks = read_timestamp();
 
     CascadeStats stats{0, 0, 0, 0.0, 0};
 
@@ -209,8 +209,8 @@ inline CascadeStats run_cascade_tick(
 
     stats.rounds = current_round;
     (void)total_risk_movements; // tracked for future telemetry
-    const uint64_t end_cycles = read_cycles();
-    stats.compute_cycles = (end_cycles > start_cycles) ? (end_cycles - start_cycles) : 0;
+    const uint64_t end_ticks = read_timestamp();
+    stats.compute_ns = (end_ticks > start_ticks) ? ticks_to_ns(end_ticks - start_ticks) : 0;
 
     return stats;
 }
