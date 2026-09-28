@@ -47,10 +47,15 @@ static Fixture g_fx;
 #ifdef OPTIRISK_BENCH_QUICK
 constexpr uint64_t WARMUP = 20;
 constexpr uint64_t ITERS  = 200;
+constexpr uint64_t SYNTH_ITERS = 20;
 constexpr uint64_t LOAD_ITERS = 20;
 #else
 constexpr uint64_t WARMUP = 200;
 constexpr uint64_t ITERS  = 5'000;
+// The synthetic graphs run to the 1024-round cap at roughly 3 ms each, so
+// they get their own budget. 400 samples still puts 4 above p99, which is
+// enough for a workload whose spread is milliseconds wide.
+constexpr uint64_t SYNTH_ITERS = 400;
 constexpr uint64_t LOAD_ITERS = 500;
 #endif
 
@@ -63,10 +68,11 @@ optirisk::network::ShockPayload equities_shock_30pct() {
 }
 
 // Full cascade at a given graph. Restore is untimed.
-Stats measure_cascade(const char* label, std::vector<uint64_t>& samples_out) {
+Stats measure_cascade(const char* label, std::vector<uint64_t>& samples_out,
+                      uint64_t iters = ITERS) {
     const auto shock = equities_shock_30pct();
     std::vector<uint64_t> samples;
-    samples.reserve(ITERS);
+    samples.reserve(iters);
 
     for (uint64_t i = 0; i < WARMUP; ++i) {
         g_fx.baseline.restore(g_fx.graph);
@@ -78,7 +84,7 @@ Stats measure_cascade(const char* label, std::vector<uint64_t>& samples_out) {
 
     uint32_t rounds_seen = 0;
     uint32_t defaults_seen = 0;
-    for (uint64_t i = 0; i < ITERS; ++i) {
+    for (uint64_t i = 0; i < iters; ++i) {
         g_fx.baseline.restore(g_fx.graph);
         reset_clob(g_fx.clob);
         optirisk::memory::init_options_book(g_fx.options);
@@ -149,7 +155,7 @@ int main(int argc, char** argv) {
         std::snprintf(label, sizeof label, "N=%u E=%u", g_fx.graph.num_nodes, g_fx.graph.num_edges);
 
         std::vector<uint64_t> s;
-        const Stats st = measure_cascade(label, s);
+        const Stats st = measure_cascade(label, s, SYNTH_ITERS);
         std::snprintf(cond, sizeof cond,
                       "synthetic N=%u E=%u; -30%% equities; state restored per iter (untimed); pinned=%d",
                       g_fx.graph.num_nodes, g_fx.graph.num_edges, pinned);
