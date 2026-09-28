@@ -29,6 +29,7 @@
 
 #include "market/order_book.hpp"
 #include "network/protocol.hpp"
+#include "network/udp_publisher.hpp"
 
 using namespace optirisk::bench;
 using optirisk::market::OrderBook;
@@ -219,7 +220,24 @@ int main(int argc, char** argv) {
     }
 
     // ── 2.5c BBO broadcast latency: fill -> visible to reader ──────
-    std::printf("\n  2.5c BBO BROADCAST LATENCY (fill -> published via ping-pong flip)\n");
+    // ── What this measures, and what it does not ───────────────────
+    //
+    // TRANSPORT: two threads inside ONE process, communicating through the
+    // CLOBEngine's ping-pong buffer. The reader spins on an atomic index in
+    // the same address space. There is no socket, no second process, and no
+    // multicast anywhere in this measurement. It is the cost of one core
+    // seeing another core's release-store and reading an already-resident
+    // buffer, which is a cross-core cache-line transfer.
+    //
+    // The shipped system does more than this. main.cpp's broadcast_thread
+    // calls clob.get_inactive_read_buffer() exactly as the reader below does,
+    // and then hands the span to UdpPublisher::broadcast_bbo(), which issues a
+    // sendmsg() to multicast group 239.255.0.1:9090 with a two-entry iovec.
+    // That syscall is NOT included here, so do not read this number as
+    // "fill to BBO on the wire". Section 2.5d measures the send separately.
+    std::printf("\n  2.5c BBO VISIBILITY LATENCY, IN-PROCESS (flip -> other thread observes)\n");
+    std::printf("       transport: two threads, one process, shared ping-pong buffer.\n");
+    std::printf("       No socket and no multicast in this path. See 2.5d for the send.\n");
     {
         static CLOBEngine clob;
         optirisk::market::init_clob(clob);
@@ -299,9 +317,50 @@ int main(int argc, char** argv) {
         std::snprintf(cond, sizeof cond,
                       "compute stamps then flip_buffers(); reader spins on active_buffer_idx (acquire); pinned=%d",
                       pinned);
-        print_stats("2.5c BBO publish -> reader observes", st, cond);
+        print_stats("2.5c BBO flip -> in-process reader observes", st, cond);
         dump_samples(outdir + "/raw_bbo_publish.csv", observed);
         emit_csv_stats("clob", "bbo_publish_latency", st, cond);
+    }
+
+    // ── 2.5d The part 2.5c leaves out: the actual multicast send ───
+    std::printf("\n  2.5d BBO MULTICAST SEND (UdpPublisher::broadcast_bbo -> sendmsg)\n");
+    {
+        static CLOBEngine clob;
+        optirisk::market::init_clob(clob);
+        static optirisk::network::UdpPublisher udp{"239.255.0.1", 9090};
+
+        optirisk::network::BboUpdate* buf = nullptr;
+        uint32_t* cnt = nullptr;
+        clob.get_write_buffer(&buf, &cnt);
+        *cnt = 0;
+        clob.books[0].refresh_liquidity(BASE_DEPTH);
+        keep(clob.books[0].market_sell(units_for_levels(BASE_DEPTH, 8), buf, cnt, 0).levels_consumed);
+        clob.flip_buffers();
+
+        auto span = clob.get_inactive_read_buffer();
+        if (span.empty()) {
+            std::printf("       SKIPPED: no BBO updates were recorded to send.\n");
+        } else {
+            constexpr uint64_t SEND_ITERS = 20'000;
+            std::vector<uint64_t> samples;
+            samples.reserve(SEND_ITERS);
+
+            for (uint64_t i = 0; i < 1'000; ++i) udp.broadcast_bbo(span);
+
+            for (uint64_t i = 0; i < SEND_ITERS; ++i) {
+                const uint64_t t0 = read_timestamp();
+                udp.broadcast_bbo(span);
+                samples.push_back(ticks_to_ns(read_timestamp() - t0));
+            }
+            const Stats st = summarize(samples);
+            std::snprintf(cond, sizeof cond,
+                          "sendmsg to 239.255.0.1:9090, %zu BboUpdate entries (%zu bytes) via 2-entry iovec; pinned=%d",
+                          span.size(), span.size() * sizeof(optirisk::network::BboUpdate), pinned);
+            print_stats("2.5d sendmsg to multicast group", st, cond);
+            dump_samples(outdir + "/raw_bbo_sendmsg.csv", samples);
+            emit_csv_stats("clob", "bbo_multicast_sendmsg", st, cond);
+            std::printf("       This is the syscall 2.5c omits. Fill-to-wire is 2.5c + 2.5d.\n");
+        }
     }
 
     std::printf("\n");
