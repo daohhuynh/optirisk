@@ -68,7 +68,7 @@ inline constexpr uint64_t LATENCY_EVENTS     = 500'000;
 inline constexpr int      REPEATS            = 5;   // independent runs — p99 stability test
 inline constexpr uint64_t PACE_NS            = 2'000;       // 500k events/s arrival
 inline constexpr uint64_t THROUGHPUT_MS      = 3'000;
-inline constexpr uint64_t PIPELINE_EVENTS    = 2'000;
+inline constexpr uint64_t PIPELINE_EVENTS    = 400;
 inline constexpr uint64_t PIPELINE_WARMUP    = 100;
 #endif
 // Sized to the heaviest case, not the lightest. A capped cascade runs ~2.5 ms,
