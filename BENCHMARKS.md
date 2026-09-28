@@ -1,6 +1,6 @@
 # OptiRisk — Measured Benchmarks
 
-Generated 2026-09-28 09:24:32 UTC by `bench/run_all.sh` + `bench/make_report.py`.
+Generated 2026-09-28 09:55:01 UTC by `bench/run_all.sh` + `bench/make_report.py`.
 
 Every number below is a measurement. Nothing here is estimated, extrapolated,
 rounded up, or carried over from another machine. Where a measurement could not
@@ -11,21 +11,21 @@ be taken, the row says so rather than being omitted.
 
 ```
 OptiRisk benchmark environment
-generated: 2026-09-28T09:22:13Z
-git commit: a7afcb4
+generated: 2026-09-28T09:52:44Z
+git commit: d231b1e
 git dirty: no
 
 ── Hardware ──
-cpu: AMD EPYC 7763 64-Core Processor
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
 arch: x86_64
 logical cores: 4
 os: Ubuntu 24.04.5 LTS
 kernel: 6.17.0-1022-azure
 avx2: yes
-avx512f: no
+avx512f: yes
 fma: yes
-governor: unknown
-turbo (intel_pstate no_turbo): unknown
+governor: performance
+turbo (intel_pstate no_turbo): 0
 isolcpus: 
 THREAD PINNING: AVAILABLE (pthread_setaffinity_np)
 
@@ -37,7 +37,7 @@ ldflags: -lpthread
 python: Python 3.12.3
 ```
 
-**Timer resolution:** `effective timer granularity: 9 ns (smallest nonzero back-to-back delta)`
+**Timer resolution:** `effective timer granularity: 7 ns (smallest nonzero back-to-back delta)`
 
 This is the floor on every latency figure in this document. Any measurement
 within a small multiple of it is quantization, not signal.
@@ -68,39 +68,39 @@ within a small multiple of it is quantization, not signal.
 
 | Metric | Value | Baseline | Speedup | Conditions |
 |---|---|---|---|---|
-| Ring handoff latency, p50 | 42 ns | 5,542 ns (mutex+queue) | 131.95x | SPSC 1024-slot, paced to queue depth ~1 |
-| Ring handoff latency, p99 | 893 ns | 17,925 ns (mutex+queue) | 20.07x | SPSC 1024-slot, paced to queue depth ~1 |
-| Ring handoff latency, p99.9 | 2,196 ns | 20,039 ns (mutex+queue) | 9.13x | SPSC 1024-slot, paced to queue depth ~1 |
-| Transport throughput | 47,273,700 events/s | 4,515,190 events/s (mutex+queue) | 10.47x | producer unpaced (saturated) |
-| Cascade tick (real 500n/7500e), p50 | 7,594 ns | — | — | real 500 nodes/7500 edges; -30% equities on node 0; state restored per |
-| Cascade tick (real 500n/7500e), p99 | 16,340 ns | — | — | same run |
-| Prefetch ablation (cascade p50) | 7,594 ns (ON) | 6,702 ns (OFF) | 0.88x | same source, two builds |
-| SIMD phases only, p50 | 1,793 ns | 2,133 ns (prefetch OFF) | 1.19x | apply_shock_simd, 500 nodes |
-| Option kernel throughput | 688.67 M options/s | 54.68 M options/s (std::erfc f64) | 12.60x | single core, batch=496, kernel path=AVX2-8lane-f32 |
-| Delta max abs error | 7.406e-07 | double-precision reference | — | full grid, finite results only |
-| Delta mean abs error | 1.394e-07 | double-precision reference | — | full grid |
+| Ring handoff latency, p50 | 27 ns | 2,589 ns (mutex+queue) | 95.89x | SPSC 1024-slot, paced to queue depth ~1 |
+| Ring handoff latency, p99 | 43 ns | 7,967 ns (mutex+queue) | 185.28x | SPSC 1024-slot, paced to queue depth ~1 |
+| Ring handoff latency, p99.9 | 722 ns | 118,912 ns (mutex+queue) | 164.70x | SPSC 1024-slot, paced to queue depth ~1 |
+| Transport throughput | 43,104,900 events/s | 4,414,230 events/s (mutex+queue) | 9.76x | producer unpaced (saturated) |
+| Cascade tick (real 500n/7500e), p50 | 8,828 ns | — | — | real 500 nodes/7500 edges; -30% equities on node 0; state restored per |
+| Cascade tick (real 500n/7500e), p99 | 10,888 ns | — | — | same run |
+| Prefetch ablation (cascade p50) | 8,828 ns (ON) | 8,927 ns (OFF) | 1.01x | same source, two builds |
+| SIMD phases only, p50 | 2,074 ns | 2,047 ns (prefetch OFF) | 0.99x | apply_shock_simd, 500 nodes |
+| Option kernel throughput | 840.51 M options/s | 57.82 M options/s (std::erfc f64) | 14.54x | single core, batch=496, kernel path=AVX2-8lane-f32 |
+| Delta max abs error | 8.003e-07 | double-precision reference | — | full grid, finite results only |
+| Delta mean abs error | 1.396e-07 | double-precision reference | — | full grid |
 | Fast-log max abs error | 1.176e-07 | double-precision reference | — | S/K in [0.70, 1.50] |
-| rcp+NR max rel error | 1.645e-07 | double-precision reference | — | p in [1, 2000] |
-| CLOB fill latency, p50 | 40 ns | — | — | 5 books, 1-12 levels per fill, BBO updates recorded, book reset per fi |
-| CLOB fill latency, p99 | 70 ns | — | — | same run |
-| CLOB fill throughput | 2,488,030 fills/s | — | — | includes refresh_liquidity re-quote per fill; pinned=1 |
-| BBO publish -> observed, p50 | 42 ns | — | — | compute stamps then flip_buffers(); reader spins on active_buffer_idx  |
-| BBO publish -> observed, p99 | 82 ns | — | — | same run |
-| Python->C++ graph load (C++ side) | 23,824 ns | 2,885 ns (in-process memcpy floor) | 8.26x SLOWER | fopen + 21 fread, warm page cache |
+| rcp+NR max rel error | 1.618e-07 | double-precision reference | — | p in [1, 2000] |
+| CLOB fill latency, p50 | 64 ns | — | — | 5 books, 1-12 levels per fill, BBO updates recorded, book reset per fi |
+| CLOB fill latency, p99 | 138 ns | — | — | same run |
+| CLOB fill throughput | 1,262,670 fills/s | — | — | includes refresh_liquidity re-quote per fill; pinned=1 |
+| BBO publish -> observed, p50 | 36 ns | — | — | compute stamps then flip_buffers(); reader spins on active_buffer_idx  |
+| BBO publish -> observed, p99 | 53 ns | — | — | same run |
+| Python->C++ graph load (C++ side) | 15,127 ns | 3,470 ns (in-process memcpy floor) | 4.36x SLOWER | fopen + 21 fread, warm page cache |
 
 ### 3.1 `O(levels consumed)` — cost vs levels consumed
 
 | Levels consumed | p50 (ns) | p99 (ns) | ns per level |
 |---|---|---|---|
-| 1 | 10 | 20 | 10.00 |
-| 2 | 10 | 20 | 5.00 |
-| 4 | 10 | 20 | 2.50 |
-| 8 | 20 | 20 | 2.50 |
-| 16 | 20 | 40 | 1.25 |
-| 32 | 49 | 60 | 1.53 |
-| 64 | 130 | 140 | 2.03 |
-| 128 | 230 | 240 | 1.80 |
-| 256 | 410 | 471 | 1.60 |
+| 1 | 17 | 22 | 17.00 |
+| 2 | 18 | 23 | 9.00 |
+| 4 | 20 | 25 | 5.00 |
+| 8 | 24 | 29 | 3.00 |
+| 16 | 32 | 38 | 2.00 |
+| 32 | 68 | 76 | 2.12 |
+| 64 | 148 | 156 | 2.31 |
+| 128 | 306 | 351 | 2.39 |
+| 256 | 660 | 673 | 2.58 |
 
 ### 3.2 `O(levels consumed)` — cost vs book depth (1 level consumed)
 
@@ -108,27 +108,27 @@ Flat here is the claim. Growth would mean the book shifts memory on consumption.
 
 | Book depth | p50 (ns) | p99 (ns) |
 |---|---|---|
-| 8 | 10 | 20 |
-| 16 | 10 | 20 |
-| 32 | 10 | 20 |
-| 64 | 10 | 20 |
-| 128 | 10 | 20 |
-| 256 | 10 | 20 |
+| 8 | 17 | 22 |
+| 16 | 17 | 22 |
+| 32 | 17 | 22 |
+| 64 | 17 | 22 |
+| 128 | 17 | 22 |
+| 256 | 17 | 22 |
 
 ### 3.3 Cascade cost by graph size
 
 | Graph | p50 (ns) | p99 (ns) | p99.9 (ns) | max (ns) |
 |---|---|---|---|---|
-| N=100 E=1504 | 698,182 | 753,857 | 935,879 | 935,879 |
-| N=200 E=3004 | 1,249,538 | 1,300,845 | 1,338,045 | 1,338,045 |
-| N=300 E=4483 | 1,860,307 | 1,930,138 | 2,071,233 | 2,071,233 |
-| N=400 E=5994 | 2,408,758 | 4,217,198 | 4,306,816 | 4,306,816 |
-| N=500 E=7475 | 2,986,755 | 3,112,751 | 3,539,313 | 3,539,313 |
-| N=100 E=1504 | 621,257 | 664,769 | 698,893 | 698,893 |
-| N=200 E=3004 | 1,078,026 | 1,142,346 | 1,160,681 | 1,160,681 |
-| N=300 E=4483 | 1,610,216 | 1,685,617 | 1,814,349 | 1,814,349 |
-| N=400 E=5994 | 2,091,521 | 2,182,241 | 2,291,075 | 2,291,075 |
-| N=500 E=7475 | 2,594,916 | 2,671,831 | 2,745,740 | 2,745,740 |
+| N=100 E=1504 | 664,313 | 758,766 | 898,492 | 898,492 |
+| N=200 E=3004 | 1,262,821 | 1,300,609 | 1,330,147 | 1,330,147 |
+| N=300 E=4483 | 1,842,407 | 1,888,146 | 2,065,594 | 2,065,594 |
+| N=400 E=5994 | 2,409,378 | 2,508,125 | 3,346,587 | 3,346,587 |
+| N=500 E=7475 | 2,978,412 | 3,073,409 | 3,154,063 | 3,154,063 |
+| N=100 E=1504 | 604,909 | 629,056 | 671,668 | 671,668 |
+| N=200 E=3004 | 1,117,878 | 1,169,736 | 1,593,178 | 1,593,178 |
+| N=300 E=4483 | 1,632,403 | 1,686,406 | 1,714,096 | 1,714,096 |
+| N=400 E=5994 | 2,148,741 | 2,231,847 | 2,340,597 | 2,340,597 |
+| N=500 E=7475 | 2,716,112 | 2,772,367 | 2,818,778 | 2,818,778 |
 
 ### 3.4 Branchless claim — disassembly
 
@@ -141,10 +141,10 @@ A nonzero count means the hot loop is not branchless even where the arithmetic i
 
 | Mechanism | p50 (ns) | p99 (ns) | bytes |
 |---|---|---|---|
-| tobytes_file_write | 375,028 | 628,219 | 143820 |
-| pickle_write | 394,755 | 587,699 | 144737 |
-| pickle_read | 65,873 | 101,099 | — |
-| shared_memory_write | 28,453 | 51,676 | 143808 |
+| tobytes_file_write | 399,341 | 3,019,271 | 143820 |
+| pickle_write | 405,078 | 2,791,047 | 144737 |
+| pickle_read | 39,217 | 74,845 | — |
+| shared_memory_write | 20,533 | 41,816 | 143808 |
 
 ## 4. Full percentile output
 
@@ -152,71 +152,76 @@ Complete per-metric percentiles, exactly as emitted:
 
 | Bench | Metric | Build | n | mean | min | p50 | p90 | p99 | p99.9 | max | Conditions |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| cascade | N=100 E=1504 | AVX2/prefetch=ON | 400 | 698926.5 | 688,013 | 698,182 | 703,633 | 753,857 | 935,879 | 935,879 | synthetic N=100 E=1504; -30% equities; state restored per iter (untimed); pinned=1 |
-| cascade | N=200 E=3004 | AVX2/prefetch=ON | 400 | 1253217.5 | 1,244,399 | 1,249,538 | 1,260,960 | 1,300,845 | 1,338,045 | 1,338,045 | synthetic N=200 E=3004; -30% equities; state restored per iter (untimed); pinned=1 |
-| cascade | N=300 E=4483 | AVX2/prefetch=ON | 400 | 1866273.1 | 1,848,535 | 1,860,307 | 1,886,226 | 1,930,138 | 2,071,233 | 2,071,233 | synthetic N=300 E=4483; -30% equities; state restored per iter (untimed); pinned=1 |
-| cascade | N=400 E=5994 | AVX2/prefetch=ON | 400 | 2453651.6 | 2,388,149 | 2,408,758 | 2,442,642 | 4,217,198 | 4,306,816 | 4,306,816 | synthetic N=400 E=5994; -30% equities; state restored per iter (untimed); pinned=1 |
-| cascade | N=500 E=7475 | AVX2/prefetch=ON | 400 | 2998182.8 | 2,972,087 | 2,986,755 | 3,020,608 | 3,112,751 | 3,539,313 | 3,539,313 | synthetic N=500 E=7475; -30% equities; state restored per iter (untimed); pinned=1 |
-| cascade | run_cascade_tick_real500 | AVX2/prefetch=ON | 5000 | 7947.1 | 7,203 | 7,594 | 7,664 | 16,340 | 97,994 | 110,377 | real 500 nodes/7500 edges; -30% equities on node 0; state restored per iter (untimed); pinned=1 |
-| cascade | apply_shock_simd_real500 | AVX2/prefetch=ON | 5000 | 2056.2 | 1,733 | 1,793 | 3,196 | 3,346 | 9,938 | 21,861 | apply_shock_simd only (2 SIMD sweeps + scalar cascade pass); real 500 nodes; pinned=1 |
-| bridge | cpp_fread_load | AVX2/prefetch=ON | 500 | 24312.4 | 23,634 | 23,824 | 24,376 | 35,326 | 48,551 | 48,551 | fopen + 21 fread of optirisk_memory.bin into .bss; warm page cache; pinned=1 |
-| bridge | memcpy_floor | AVX2/prefetch=ON | 500 | 3058.2 | 2,835 | 2,885 | 2,905 | 3,105 | 69,410 | 69,410 | in-process memcpy of sizeof(CSRGraph)=144448 bytes; the floor a true zero-copy path would beat |
-| cascade | N=100 E=1504 | AVX2/prefetch=OFF | 400 | 623569.8 | 609,846 | 621,257 | 635,965 | 664,769 | 698,893 | 698,893 | synthetic N=100 E=1504; -30% equities; state restored per iter (untimed); pinned=1 |
-| cascade | N=200 E=3004 | AVX2/prefetch=OFF | 400 | 1084734.3 | 1,073,828 | 1,078,026 | 1,105,397 | 1,142,346 | 1,160,681 | 1,160,681 | synthetic N=200 E=3004; -30% equities; state restored per iter (untimed); pinned=1 |
-| cascade | N=300 E=4483 | AVX2/prefetch=OFF | 400 | 1616950.6 | 1,586,351 | 1,610,216 | 1,649,329 | 1,685,617 | 1,814,349 | 1,814,349 | synthetic N=300 E=4483; -30% equities; state restored per iter (untimed); pinned=1 |
-| cascade | N=400 E=5994 | AVX2/prefetch=OFF | 400 | 2093576.5 | 2,049,131 | 2,091,521 | 2,130,864 | 2,182,241 | 2,291,075 | 2,291,075 | synthetic N=400 E=5994; -30% equities; state restored per iter (untimed); pinned=1 |
-| cascade | N=500 E=7475 | AVX2/prefetch=OFF | 400 | 2596811.7 | 2,552,777 | 2,594,916 | 2,631,996 | 2,671,831 | 2,745,740 | 2,745,740 | synthetic N=500 E=7475; -30% equities; state restored per iter (untimed); pinned=1 |
-| cascade | run_cascade_tick_real500 | AVX2/prefetch=OFF | 5000 | 6788.5 | 6,612 | 6,702 | 6,752 | 9,157 | 17,342 | 25,578 | real 500 nodes/7500 edges; -30% equities on node 0; state restored per iter (untimed); pinned=1 |
-| cascade | apply_shock_simd_real500 | AVX2/prefetch=OFF | 5000 | 2334.7 | 2,093 | 2,133 | 3,116 | 3,226 | 12,794 | 33,252 | apply_shock_simd only (2 SIMD sweeps + scalar cascade pass); real 500 nodes; pinned=1 |
-| bridge | cpp_fread_load | AVX2/prefetch=OFF | 500 | 24247.9 | 23,584 | 23,784 | 24,355 | 35,977 | 49,302 | 49,302 | fopen + 21 fread of optirisk_memory.bin into .bss; warm page cache; pinned=1 |
-| bridge | memcpy_floor | AVX2/prefetch=OFF | 500 | 3038.8 | 2,845 | 2,885 | 2,905 | 3,115 | 67,707 | 67,707 | in-process memcpy of sizeof(CSRGraph)=144448 bytes; the floor a true zero-copy path would beat |
-| clob | fill_levels_1 | AVX2/prefetch=ON | 20000 | 11.3 | 9 | 10 | 20 | 20 | 20 | 30 | depth=256, levels consumed=1 (observed 1), no BBO recording; pinned=1 |
-| clob | fill_levels_2 | AVX2/prefetch=ON | 20000 | 11.2 | 9 | 10 | 20 | 20 | 20 | 50 | depth=256, levels consumed=2 (observed 2), no BBO recording; pinned=1 |
-| clob | fill_levels_4 | AVX2/prefetch=ON | 20000 | 11.7 | 9 | 10 | 20 | 20 | 30 | 170 | depth=256, levels consumed=4 (observed 4), no BBO recording; pinned=1 |
-| clob | fill_levels_8 | AVX2/prefetch=ON | 20000 | 15.6 | 9 | 20 | 20 | 20 | 40 | 90 | depth=256, levels consumed=8 (observed 8), no BBO recording; pinned=1 |
-| clob | fill_levels_16 | AVX2/prefetch=ON | 20000 | 27.0 | 20 | 20 | 30 | 40 | 50 | 15,549 | depth=256, levels consumed=16 (observed 16), no BBO recording; pinned=1 |
-| clob | fill_levels_32 | AVX2/prefetch=ON | 20000 | 45.5 | 29 | 49 | 50 | 60 | 80 | 360 | depth=256, levels consumed=32 (observed 32), no BBO recording; pinned=1 |
-| clob | fill_levels_64 | AVX2/prefetch=ON | 20000 | 129.6 | 120 | 130 | 130 | 140 | 200 | 16,701 | depth=256, levels consumed=64 (observed 64), no BBO recording; pinned=1 |
-| clob | fill_levels_128 | AVX2/prefetch=ON | 20000 | 235.2 | 220 | 230 | 240 | 240 | 310 | 15,339 | depth=256, levels consumed=128 (observed 128), no BBO recording; pinned=1 |
-| clob | fill_levels_256 | AVX2/prefetch=ON | 20000 | 419.0 | 390 | 410 | 420 | 471 | 561 | 16,330 | depth=256, levels consumed=256 (observed 256), no BBO recording; pinned=1 |
-| clob | fill_depth_8 | AVX2/prefetch=ON | 20000 | 12.3 | 9 | 10 | 20 | 20 | 20 | 40 | book depth=8, 1 level consumed; pinned=1 |
-| clob | fill_depth_16 | AVX2/prefetch=ON | 20000 | 12.3 | 9 | 10 | 20 | 20 | 20 | 170 | book depth=16, 1 level consumed; pinned=1 |
-| clob | fill_depth_32 | AVX2/prefetch=ON | 20000 | 12.3 | 9 | 10 | 20 | 20 | 20 | 160 | book depth=32, 1 level consumed; pinned=1 |
-| clob | fill_depth_64 | AVX2/prefetch=ON | 20000 | 12.3 | 9 | 10 | 20 | 20 | 20 | 89 | book depth=64, 1 level consumed; pinned=1 |
-| clob | fill_depth_128 | AVX2/prefetch=ON | 20000 | 12.3 | 9 | 10 | 20 | 20 | 20 | 180 | book depth=128, 1 level consumed; pinned=1 |
-| clob | fill_depth_256 | AVX2/prefetch=ON | 20000 | 12.3 | 9 | 10 | 20 | 20 | 20 | 80 | book depth=256, 1 level consumed; pinned=1 |
-| clob | fill_latency_mixed | AVX2/prefetch=ON | 200000 | 37.1 | 9 | 40 | 60 | 70 | 90 | 35,707 | 5 books, 1-12 levels per fill, BBO updates recorded, book reset per fill (untimed); pinned=1 |
-| clob | bbo_publish_latency | AVX2/prefetch=ON | 100000 | 52.3 | 12 | 42 | 72 | 82 | 1,885 | 16,132 | compute stamps then flip_buffers(); reader spins on active_buffer_idx (acquire); pinned=1 |
-| noise | fixed_work_unit | AVX2/prefetch=ON | 2000000 | 309.1 | 210 | 310 | 310 | 310 | 340 | 39,454 | identical 256-FMA dependency chain every iteration; all spread is machine noise; pinned=1 |
-| ring | disruptor_handoff_paced | AVX2/prefetch=ON | 2500000 | 3017385912981.4 | 2 | 42 | 62 | 893 | 2,196 | 7,543,464,782,278,547,456 | SPSC 1024-slot ring; paced 2000ns (queue depth ~1); 5 runs pooled; pinned=1 |
-| ring | mutex_handoff_paced | AVX2/prefetch=ON | 2500000 | 7172.5 | 42 | 5,542 | 14,770 | 17,925 | 20,039 | 248,619 | std::mutex + std::queue + condition_variable, 1024-bounded; paced 2000ns; 5 runs pooled; pinned=1 |
-| ring | pipeline_no_defaults | AVX2/prefetch=ON | 400 | 19021.3 | 17,274 | 18,847 | 20,210 | 22,634 | 23,135 | 23,135 | no defaults: 500 nodes/7500 edges, 2 rounds, 0 defaults; state restored between events (untimed); paced 20000us; pinned=1 |
-| ring | pipeline_small_cascade | AVX2/prefetch=ON | 400 | 5235684.9 | 5,142,800 | 5,240,363 | 5,255,281 | 5,268,246 | 5,293,944 | 5,293,944 | small cascade: 500 nodes/7500 edges, 1024 rounds, 22 defaults; state restored between events (untimed); paced 20000us; pinned=1 |
-| ring | pipeline_large_cascade | AVX2/prefetch=ON | 400 | 7895933.6 | 7,806,919 | 7,893,972 | 7,938,336 | 7,977,950 | 8,022,063 | 8,022,063 | large cascade: 500 nodes/7500 edges, 1024 rounds, 215 defaults; state restored between events (untimed); paced 20000us; pinned=1 |
-| ring | disruptor_handoff_paced | AVX2/prefetch=OFF | 2500000 | 63.4 | 12 | 42 | 62 | 102 | 1,805 | 136,608 | SPSC 1024-slot ring; paced 2000ns (queue depth ~1); 5 runs pooled; pinned=1 |
-| ring | mutex_handoff_paced | AVX2/prefetch=OFF | 2500000 | 7234.9 | 32 | 5,562 | 14,870 | 17,995 | 19,929 | 84,891 | std::mutex + std::queue + condition_variable, 1024-bounded; paced 2000ns; 5 runs pooled; pinned=1 |
-| ring | pipeline_no_defaults | AVX2/prefetch=OFF | 400 | 18395.0 | 15,852 | 18,166 | 19,999 | 23,385 | 24,468 | 24,468 | no defaults: 500 nodes/7500 edges, 2 rounds, 0 defaults; state restored between events (untimed); paced 20000us; pinned=1 |
-| ring | pipeline_small_cascade | AVX2/prefetch=OFF | 400 | 5372157.3 | 5,106,887 | 5,373,567 | 5,386,812 | 5,401,189 | 5,699,087 | 5,699,087 | small cascade: 500 nodes/7500 edges, 1024 rounds, 22 defaults; state restored between events (untimed); paced 20000us; pinned=1 |
-| ring | pipeline_large_cascade | AVX2/prefetch=OFF | 400 | 8198562.1 | 8,111,450 | 8,195,758 | 8,250,361 | 8,284,164 | 8,530,847 | 8,530,847 | large cascade: 500 nodes/7500 edges, 1024 rounds, 215 defaults; state restored between events (untimed); paced 20000us; pinned=1 |
+| cascade | N=100 E=1504 | AVX2/prefetch=ON | 400 | 667389.4 | 650,877 | 664,313 | 672,969 | 758,766 | 898,492 | 898,492 | synthetic N=100 E=1504; -30% equities; state restored per iter (untimed); pinned=1 |
+| cascade | N=200 E=3004 | AVX2/prefetch=ON | 400 | 1263706.3 | 1,236,098 | 1,262,821 | 1,275,667 | 1,300,609 | 1,330,147 | 1,330,147 | synthetic N=200 E=3004; -30% equities; state restored per iter (untimed); pinned=1 |
+| cascade | N=300 E=4483 | AVX2/prefetch=ON | 400 | 1844341.8 | 1,809,709 | 1,842,407 | 1,862,141 | 1,888,146 | 2,065,594 | 2,065,594 | synthetic N=300 E=4483; -30% equities; state restored per iter (untimed); pinned=1 |
+| cascade | N=400 E=5994 | AVX2/prefetch=ON | 400 | 2415497.7 | 2,365,017 | 2,409,378 | 2,435,716 | 2,508,125 | 3,346,587 | 3,346,587 | synthetic N=400 E=5994; -30% equities; state restored per iter (untimed); pinned=1 |
+| cascade | N=500 E=7475 | AVX2/prefetch=ON | 400 | 2981341.2 | 2,867,864 | 2,978,412 | 3,009,432 | 3,073,409 | 3,154,063 | 3,154,063 | synthetic N=500 E=7475; -30% equities; state restored per iter (untimed); pinned=1 |
+| cascade | run_cascade_tick_real500 | AVX2/prefetch=ON | 5000 | 8966.5 | 8,652 | 8,828 | 9,108 | 10,888 | 15,510 | 21,128 | real 500 nodes/7500 edges; -30% equities on node 0; state restored per iter (untimed); pinned=1 |
+| cascade | apply_shock_simd_real500 | AVX2/prefetch=ON | 5000 | 2120.9 | 2,023 | 2,074 | 2,100 | 2,346 | 12,011 | 14,447 | apply_shock_simd only (2 SIMD sweeps + scalar cascade pass); real 500 nodes; pinned=1 |
+| bridge | cpp_fread_load | AVX2/prefetch=ON | 500 | 15295.7 | 14,954 | 15,127 | 15,215 | 22,122 | 36,882 | 36,882 | fopen + 21 fread of optirisk_memory.bin into .bss; warm page cache; pinned=1 |
+| bridge | memcpy_floor | AVX2/prefetch=ON | 500 | 3621.6 | 3,358 | 3,470 | 3,509 | 3,540 | 65,155 | 65,155 | in-process memcpy of sizeof(CSRGraph)=144448 bytes; the floor a true zero-copy path would beat |
+| cascade | N=100 E=1504 | AVX2/prefetch=OFF | 400 | 605333.2 | 589,282 | 604,909 | 612,029 | 629,056 | 671,668 | 671,668 | synthetic N=100 E=1504; -30% equities; state restored per iter (untimed); pinned=1 |
+| cascade | N=200 E=3004 | AVX2/prefetch=OFF | 400 | 1120480.3 | 1,091,235 | 1,117,878 | 1,130,396 | 1,169,736 | 1,593,178 | 1,593,178 | synthetic N=200 E=3004; -30% equities; state restored per iter (untimed); pinned=1 |
+| cascade | N=300 E=4483 | AVX2/prefetch=OFF | 400 | 1633974.5 | 1,601,961 | 1,632,403 | 1,650,287 | 1,686,406 | 1,714,096 | 1,714,096 | synthetic N=300 E=4483; -30% equities; state restored per iter (untimed); pinned=1 |
+| cascade | N=400 E=5994 | AVX2/prefetch=OFF | 400 | 2152916.0 | 2,110,569 | 2,148,741 | 2,176,371 | 2,231,847 | 2,340,597 | 2,340,597 | synthetic N=400 E=5994; -30% equities; state restored per iter (untimed); pinned=1 |
+| cascade | N=500 E=7475 | AVX2/prefetch=OFF | 400 | 2718598.0 | 2,667,193 | 2,716,112 | 2,744,690 | 2,772,367 | 2,818,778 | 2,818,778 | synthetic N=500 E=7475; -30% equities; state restored per iter (untimed); pinned=1 |
+| cascade | run_cascade_tick_real500 | AVX2/prefetch=OFF | 5000 | 9068.8 | 8,567 | 8,927 | 9,182 | 11,161 | 16,778 | 28,001 | real 500 nodes/7500 edges; -30% equities on node 0; state restored per iter (untimed); pinned=1 |
+| cascade | apply_shock_simd_real500 | AVX2/prefetch=OFF | 5000 | 2340.8 | 1,986 | 2,047 | 3,089 | 3,360 | 13,015 | 15,157 | apply_shock_simd only (2 SIMD sweeps + scalar cascade pass); real 500 nodes; pinned=1 |
+| bridge | cpp_fread_load | AVX2/prefetch=OFF | 500 | 15284.3 | 15,001 | 15,109 | 15,224 | 21,861 | 28,423 | 28,423 | fopen + 21 fread of optirisk_memory.bin into .bss; warm page cache; pinned=1 |
+| bridge | memcpy_floor | AVX2/prefetch=OFF | 500 | 3622.4 | 3,341 | 3,480 | 3,509 | 3,547 | 60,840 | 60,840 | in-process memcpy of sizeof(CSRGraph)=144448 bytes; the floor a true zero-copy path would beat |
+| clob | fill_levels_1 | AVX2/prefetch=ON | 20000 | 17.0 | 10 | 17 | 21 | 22 | 23 | 80 | depth=256, levels consumed=1 (observed 1), no BBO recording; pinned=1 |
+| clob | fill_levels_2 | AVX2/prefetch=ON | 20000 | 19.2 | 12 | 18 | 22 | 23 | 26 | 13,485 | depth=256, levels consumed=2 (observed 2), no BBO recording; pinned=1 |
+| clob | fill_levels_4 | AVX2/prefetch=ON | 20000 | 20.5 | 13 | 20 | 24 | 25 | 26 | 10,734 | depth=256, levels consumed=4 (observed 4), no BBO recording; pinned=1 |
+| clob | fill_levels_8 | AVX2/prefetch=ON | 20000 | 24.8 | 18 | 24 | 28 | 29 | 30 | 9,734 | depth=256, levels consumed=8 (observed 8), no BBO recording; pinned=1 |
+| clob | fill_levels_16 | AVX2/prefetch=ON | 20000 | 32.4 | 25 | 32 | 36 | 38 | 39 | 100 | depth=256, levels consumed=16 (observed 16), no BBO recording; pinned=1 |
+| clob | fill_levels_32 | AVX2/prefetch=ON | 20000 | 70.0 | 60 | 68 | 73 | 76 | 78 | 12,090 | depth=256, levels consumed=32 (observed 32), no BBO recording; pinned=1 |
+| clob | fill_levels_64 | AVX2/prefetch=ON | 20000 | 150.4 | 138 | 148 | 153 | 156 | 177 | 11,544 | depth=256, levels consumed=64 (observed 64), no BBO recording; pinned=1 |
+| clob | fill_levels_128 | AVX2/prefetch=ON | 20000 | 311.1 | 295 | 306 | 313 | 351 | 360 | 13,936 | depth=256, levels consumed=128 (observed 128), no BBO recording; pinned=1 |
+| clob | fill_levels_256 | AVX2/prefetch=ON | 20000 | 663.9 | 642 | 660 | 666 | 673 | 727 | 10,868 | depth=256, levels consumed=256 (observed 256), no BBO recording; pinned=1 |
+| clob | fill_depth_8 | AVX2/prefetch=ON | 20000 | 17.4 | 11 | 17 | 21 | 22 | 22 | 65 | book depth=8, 1 level consumed; pinned=1 |
+| clob | fill_depth_16 | AVX2/prefetch=ON | 20000 | 17.3 | 11 | 17 | 21 | 22 | 22 | 49 | book depth=16, 1 level consumed; pinned=1 |
+| clob | fill_depth_32 | AVX2/prefetch=ON | 20000 | 17.4 | 11 | 17 | 21 | 22 | 22 | 40 | book depth=32, 1 level consumed; pinned=1 |
+| clob | fill_depth_64 | AVX2/prefetch=ON | 20000 | 17.4 | 11 | 17 | 21 | 22 | 22 | 39 | book depth=64, 1 level consumed; pinned=1 |
+| clob | fill_depth_128 | AVX2/prefetch=ON | 20000 | 17.7 | 12 | 17 | 21 | 22 | 23 | 6,834 | book depth=128, 1 level consumed; pinned=1 |
+| clob | fill_depth_256 | AVX2/prefetch=ON | 20000 | 17.4 | 12 | 17 | 21 | 22 | 22 | 40 | book depth=256, 1 level consumed; pinned=1 |
+| clob | fill_latency_mixed | AVX2/prefetch=ON | 200000 | 66.5 | 14 | 64 | 110 | 138 | 156 | 11,267 | 5 books, 1-12 levels per fill, BBO updates recorded, book reset per fill (untimed); pinned=1 |
+| clob | bbo_publish_latency | AVX2/prefetch=ON | 100000 | 38.1 | 10 | 36 | 48 | 53 | 62 | 9,744 | compute stamps then flip_buffers(); reader spins on active_buffer_idx (acquire); pinned=1 |
+| clob | bbo_multicast_sendmsg | AVX2/prefetch=ON | 20000 | 4177.2 | 2,314 | 4,154 | 4,889 | 5,694 | 16,395 | 315,057 | sendmsg to 239.255.0.1:9090, 9 BboUpdate entries (144 bytes) via 2-entry iovec; pinned=1 |
+| noise | fixed_work_unit | AVX2/prefetch=ON | 2000000 | 232.9 | 214 | 232 | 239 | 245 | 360 | 22,882 | identical 256-FMA dependency chain every iteration; all spread is machine noise; pinned=1 |
+| ring | disruptor_handoff_paced | AVX2/prefetch=ON | 2500000 | 66.8 | 10 | 27 | 39 | 43 | 722 | 327,632 | SPSC 1024-slot ring; paced 2000ns (queue depth ~1); 5 runs pooled; pinned=1 |
+| ring | mutex_handoff_paced | AVX2/prefetch=ON | 2500000 | 3685.6 | 59 | 2,589 | 4,803 | 7,967 | 118,912 | 2,576,095 | std::mutex + std::queue + condition_variable, 1024-bounded; paced 2000ns; 5 runs pooled; pinned=1 |
+| ring | pipeline_no_defaults | AVX2/prefetch=ON | 400 | 11174.5 | 10,506 | 11,149 | 11,467 | 12,983 | 14,296 | 14,296 | no defaults: 500 nodes/7500 edges, 2 rounds, 0 defaults; state restored between events (untimed); paced 20000us; pinned=1 |
+| ring | pipeline_small_cascade | AVX2/prefetch=ON | 400 | 4391746.5 | 4,259,424 | 4,385,177 | 4,457,456 | 4,526,047 | 4,585,229 | 4,585,229 | small cascade: 500 nodes/7500 edges, 1024 rounds, 22 defaults; state restored between events (untimed); paced 20000us; pinned=1 |
+| ring | pipeline_large_cascade | AVX2/prefetch=ON | 400 | 6280500.5 | 6,086,481 | 6,256,616 | 6,418,329 | 6,587,607 | 6,613,950 | 6,613,950 | large cascade: 500 nodes/7500 edges, 1024 rounds, 215 defaults; state restored between events (untimed); paced 20000us; pinned=1 |
+| ring | disruptor_handoff_paced | AVX2/prefetch=OFF | 2500000 | 3208187708695.8 | 10 | 27 | 39 | 43 | 671 | 8,020,469,271,578,952,704 | SPSC 1024-slot ring; paced 2000ns (queue depth ~1); 5 runs pooled; pinned=1 |
+| ring | mutex_handoff_paced | AVX2/prefetch=OFF | 2500000 | 2840.1 | 57 | 2,663 | 4,942 | 8,021 | 12,876 | 315,207 | std::mutex + std::queue + condition_variable, 1024-bounded; paced 2000ns; 5 runs pooled; pinned=1 |
+| ring | pipeline_no_defaults | AVX2/prefetch=OFF | 400 | 11032.3 | 10,396 | 10,879 | 11,208 | 15,210 | 33,934 | 33,934 | no defaults: 500 nodes/7500 edges, 2 rounds, 0 defaults; state restored between events (untimed); paced 20000us; pinned=1 |
+| ring | pipeline_small_cascade | AVX2/prefetch=OFF | 400 | 4294020.3 | 4,198,339 | 4,290,480 | 4,348,544 | 4,432,862 | 4,483,445 | 4,483,445 | small cascade: 500 nodes/7500 edges, 1024 rounds, 22 defaults; state restored between events (untimed); paced 20000us; pinned=1 |
+| ring | pipeline_large_cascade | AVX2/prefetch=OFF | 400 | 6277115.2 | 6,084,880 | 6,246,615 | 6,473,927 | 6,605,631 | 6,716,698 | 6,716,698 | large cascade: 500 nodes/7500 edges, 1024 rounds, 215 defaults; state restored between events (untimed); paced 20000us; pinned=1 |
 
 ### Scalar metrics
 
 | Bench | Metric | Build | Value | Unit | Conditions |
 |---|---|---|---|---|---|
 | blackscholes | delta_nonfinite_count | AVX2/prefetch=ON | 0 | count | inputs where the kernel returned NaN/Inf instead of a delta |
-| blackscholes | delta_max_abs_err | AVX2/prefetch=ON | 7.40648e-07 | abs | full grid, finite results only |
-| blackscholes | delta_mean_abs_err | AVX2/prefetch=ON | 1.39365e-07 | abs | full grid |
+| blackscholes | delta_max_abs_err | AVX2/prefetch=ON | 8.00252e-07 | abs | full grid, finite results only |
+| blackscholes | delta_mean_abs_err | AVX2/prefetch=ON | 1.39572e-07 | abs | full grid |
 | blackscholes | delta_max_abs_err_atm | AVX2/prefetch=ON | 7.07965e-07 | abs | |ln(S/K)|<=0.05 |
-| blackscholes | delta_max_abs_err_far | AVX2/prefetch=ON | 7.40648e-07 | abs | |ln(S/K)|>0.20 |
+| blackscholes | delta_max_abs_err_far | AVX2/prefetch=ON | 8.00252e-07 | abs | |ln(S/K)|>0.20 |
 | blackscholes | unpriced_tail_options | AVX2/prefetch=ON | 0 | count | count=500; options the kernel never wrote |
 | blackscholes | fastlog_max_abs_err | AVX2/prefetch=ON | 1.17632e-07 | abs | S/K in [0.70, 1.50] |
-| blackscholes | rcp_nr_max_rel_err | AVX2/prefetch=ON | 1.64524e-07 | relative | p in [1, 2000] |
-| blackscholes | kernel_throughput_ops | AVX2/prefetch=ON | 6.88669e+08 | options/s | single core, batch=496, kernel path=AVX2-8lane-f32 |
-| blackscholes | scalar_throughput_ops | AVX2/prefetch=ON | 5.46776e+07 | options/s | std::erfc f64, single core, batch=496 |
-| blackscholes | speedup_vs_scalar | AVX2/prefetch=ON | 12.5951 | x | same batch |
+| blackscholes | rcp_nr_max_rel_err | AVX2/prefetch=ON | 1.61759e-07 | relative | p in [1, 2000] |
+| blackscholes | f32_scalar_vs_avx2_max_diff | AVX2/prefetch=ON | 0 | abs | scalar f32 approx vs AVX2 kernel, same inputs |
+| blackscholes | f32_scalar_throughput_ops | AVX2/prefetch=ON | 1.00361e+08 | options/s | scalar f32, same approximations as the AVX2 kernel, single lane |
+| blackscholes | speedup_math_only | AVX2/prefetch=ON | 1.73571 | x | f64 libm -> f32 approx, both scalar |
+| blackscholes | speedup_vectorization_only | AVX2/prefetch=ON | 8.37489 | x | f32 approx scalar -> AVX2 8-lane |
+| blackscholes | kernel_throughput_ops | AVX2/prefetch=ON | 8.40512e+08 | options/s | single core, batch=496, kernel path=AVX2-8lane-f32 |
+| blackscholes | scalar_throughput_ops | AVX2/prefetch=ON | 5.78213e+07 | options/s | std::erfc f64, single core, batch=496 |
+| blackscholes | speedup_vs_scalar | AVX2/prefetch=ON | 14.5364 | x | same batch |
 | bridge | graph_bytes | AVX2/prefetch=ON | 144448 | bytes | sizeof(CSRGraph) |
 | bridge | graph_bytes | AVX2/prefetch=OFF | 144448 | bytes | sizeof(CSRGraph) |
-| clob | fill_throughput_fps | AVX2/prefetch=ON | 2.48803e+06 | fills/s | includes refresh_liquidity re-quote per fill; pinned=1 |
+| clob | fill_throughput_fps | AVX2/prefetch=ON | 1.26267e+06 | fills/s | includes refresh_liquidity re-quote per fill; pinned=1 |
 | convergence | -10% equities | AVX2/prefetch=ON | 1 | rounds | -10% equities: new 1 rounds / legacy 3 rounds; 0 defaults; DIVERGED |
 | convergence_legacy | -10% equities | AVX2/prefetch=ON | 3 | rounds | -10% equities: new 1 rounds / legacy 3 rounds; 0 defaults; DIVERGED |
 | convergence | -30% equities | AVX2/prefetch=ON | 1 | rounds | -30% equities: new 1 rounds / legacy 2 rounds; 0 defaults; final state identical |
@@ -236,62 +241,65 @@ Complete per-metric percentiles, exactly as emitted:
 | convergence | -90% all classes | AVX2/prefetch=ON | 2 | rounds | -90% all classes: new 2 rounds / legacy 2 rounds; 500 defaults; final state identical |
 | convergence_legacy | -90% all classes | AVX2/prefetch=ON | 2 | rounds | -90% all classes: new 2 rounds / legacy 2 rounds; 500 defaults; final state identical |
 | convergence | diverged_scenarios | AVX2/prefetch=ON | 4 | count | shocks whose final state differs between the two policies |
-| noise | p99_over_p50 | AVX2/prefetch=ON | 1 | ratio | 1.00 = interference does not reach p99 |
-| ring | disruptor_p99_spread_pct | AVX2/prefetch=ON | 122.139 | percent | p99 spread across 5 runs |
-| ring | mutex_p99_spread_pct | AVX2/prefetch=ON | 1.87058 | percent | p99 spread across 5 runs |
-| ring | disruptor_throughput_eps | AVX2/prefetch=ON | 4.72737e+07 | events/s | unpaced; SPSC ring; pinned=1 |
-| ring | mutex_throughput_eps | AVX2/prefetch=ON | 4.51519e+06 | events/s | unpaced; mutex+queue; pinned=1 |
-| ring | disruptor_p99_spread_pct | AVX2/prefetch=OFF | 231.707 | percent | p99 spread across 5 runs |
-| ring | mutex_p99_spread_pct | AVX2/prefetch=OFF | 0.222531 | percent | p99 spread across 5 runs |
-| ring | disruptor_throughput_eps | AVX2/prefetch=OFF | 4.73025e+07 | events/s | unpaced; SPSC ring; pinned=1 |
-| ring | mutex_throughput_eps | AVX2/prefetch=OFF | 4.55673e+06 | events/s | unpaced; mutex+queue; pinned=1 |
+| noise | p99_over_p50 | AVX2/prefetch=ON | 1.05603 | ratio | 1.00 = interference does not reach p99 |
+| ring | disruptor_p99_spread_pct | AVX2/prefetch=ON | 0 | percent | p99 spread across 5 runs |
+| ring | mutex_p99_spread_pct | AVX2/prefetch=ON | 3.17178 | percent | p99 spread across 5 runs |
+| ring | disruptor_throughput_eps | AVX2/prefetch=ON | 4.31049e+07 | events/s | unpaced; SPSC ring; pinned=1 |
+| ring | mutex_throughput_eps | AVX2/prefetch=ON | 4.41423e+06 | events/s | unpaced; mutex+queue; pinned=1 |
+| ring | disruptor_p99_spread_pct | AVX2/prefetch=OFF | 0 | percent | p99 spread across 5 runs |
+| ring | mutex_p99_spread_pct | AVX2/prefetch=OFF | 1.72175 | percent | p99 spread across 5 runs |
+| ring | disruptor_throughput_eps | AVX2/prefetch=OFF | 4.30173e+07 | events/s | unpaced; SPSC ring; pinned=1 |
+| ring | mutex_throughput_eps | AVX2/prefetch=OFF | 4.50038e+06 | events/s | unpaced; mutex+queue; pinned=1 |
 
-## 4.5 Cascade termination: why the shipped policy is the slow one
+## 4.6 Where the option kernel speedup comes from
 
-`run_cascade_tick()` takes a compile-time `CascadeTermination` policy.
-`NoNewDefaults` stops at the first round producing no new default;
-`RiskQuiescence` (the default) also keeps going while any risk score moves.
-The obvious optimisation is unsafe, and `bench_convergence` is what shows it:
+The headline figure compares scalar f64 libm against AVX2 f32, which changes
+two things at once. Adding a scalar f32 rung that uses the kernel's exact
+approximations (same fast-log series, same Horner order, same y saturation,
+same 14-bit reciprocal plus one Newton-Raphson step) separates them. All
+three run back to back on one thread, confirmed single-threaded by reading
+/proc/self/status, over the same 496-option batch.
 
-| Shock | NoNewDefaults | RiskQuiescence | Final state |
+| Variant | M options/s | ns/option |
+|---|---|---|
+| A. scalar f64, libm `std::erfc` | 57.8 | 17.29 |
+| B. scalar f32, same approximations | 100.4 | 9.96 |
+| C. AVX2 f32, 8 lanes (shipped) | 840.5 | 1.19 |
+
+| Contribution | Factor | What changed |
+|---|---|---|
+| Cheaper math (A to B) | **1.74x** | f64 libm to f32 polynomial approximations |
+| Vectorization (B to C) | **8.37x** | 1 lane to 8 lanes |
+| Total (A to C) | **14.54x** | |
+
+**Vectorization is doing nearly all of the work.** The approximations are
+worth 1.74x; the eight lanes are worth 8.37x, slightly above the 8.00x lane
+ceiling because the vector form also amortises loop overhead across a group.
+B and C agree to 0.000e+00 max absolute difference, so the split compares two
+implementations of the same function rather than two different functions.
+
+## 4.7 BBO: in-process visibility is not the wire
+
+Two different costs, often conflated:
+
+| Stage | p50 | p99 | Transport |
 |---|---|---|---|
-| -10% equities | 1 rnd / 0 def | 3 rnd / 0 def | diverged (risk, NAV) |
-| -30% equities | 1 rnd / 0 def | 2 rnd / 0 def | identical |
-| -50% equities | 1 rnd / 0 def | 2 rnd / 0 def | identical |
-| **-80% equities** | **1 rnd / 0 def** | **1024 rnd / 22 def** | **diverged: all 22 defaults lost** |
-| -80% crypto | 1 rnd / 0 def | 2 rnd / 0 def | identical |
-| Lehman | 1 rnd / 0 def | 2 rnd / 0 def | identical |
-| Covid | 1 rnd / 0 def | 1024 rnd / 0 def | diverged (risk) |
-| **-50% all classes** | **3 rnd / 212 def** | **1024 rnd / 215 def** | **diverged: 3 defaults lost** |
-| -90% all classes | 2 rnd / 500 def | 2 rnd / 500 def | identical |
+| Flip to in-process reader observes | **36 ns** | 53 ns | Two threads, one process, shared ping-pong buffer. No socket. |
+| `broadcast_bbo` sendmsg to multicast | **4,154 ns** | 5,694 ns | `sendmsg` to 239.255.0.1:9090, 2-entry iovec, 9 entries / 144 bytes |
 
-4 of 9 diverge. The default set is compared exactly; risk and NAV within
-1e-4 and 1e-9 relative.
+The 36 ns is a cross-core cache-line transfer, not a publish. The shipped
+path in `main.cpp`'s broadcast_thread does both: it reads the inactive buffer
+exactly as the benchmark's reader does, then hands the span to
+`UdpPublisher::broadcast_bbo()`. Fill-to-wire is therefore roughly 4.2 us,
+dominated entirely by the syscall, and the ping-pong buffer contributes under
+1% of it.
 
-The reason is the gap structure. Defaults do not arrive in one wave:
-
-| Shock | Defaults | Last default at | Longest quiet gap |
-|---|---|---|---|
-| -80% equities | 22 | round 952 | **469 rounds** |
-| -50% all classes | 215 | round 32 | 15 rounds |
-| -90% all classes | 500 | round 0 | 0 rounds |
-
-Under -80% equities a firm defaults, 469 consecutive rounds pass with nothing
-observable, then another defaults. Stress contagion raises neighbour risk
-fractionally per round until a firm crosses `DEFAULT_THRESH`. Any
-stop-when-quiet rule needs patience above 469 rounds on this graph, which
-costs more than it saves.
-
-Two consequences:
-
-1. Those late defaults are not counterparty contagion. A 469-round gap with
-   no intervening event means they come from the gamma-hedging loop grinding
-   prices down, not from the network.
-2. **The 1024-round cap truncates real results.** The last default at round
-   952 of 1024 means a higher cap would likely find more, so default counts
-   for severe shocks are lower bounds.
-
-Both are model problems, not loop problems, and are not fixed here.
+UDP multicast appears in exactly one place in the project: `UdpPublisher`
+(`backend/src/network/udp_publisher.hpp`), constructed in `main.cpp` as
+`{"239.255.0.1", 9090}` and called from the broadcast thread via
+`broadcast_tick`, `broadcast_bbo`, and `broadcast_var`. The browser frontend
+cannot receive multicast, so it consumes the WebSocket path instead; the UDP
+feed has no consumer in this repository.
 
 ## 5. Reproducing
 
